@@ -1,0 +1,38 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="980" height="330" viewBox="0 0 980 330" role="img" aria-label="git-board config panel screenshot">
+  <rect width="980" height="330" fill="#14191d"/>
+  <style>
+    text { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace; font-size: 18px; }
+    .cyan { fill: #21c8d4; font-weight: 700; }
+    .label { fill: #ffff4d; font-weight: 700; }
+    .value { fill: #f2f2f2; font-weight: 700; }
+    .hint { fill: #6e7279; }
+    .selected { fill: #f2f2f2; font-weight: 700; }
+    .footer { fill: #7d8188; }
+  </style>
+
+  <text x="492" y="26" class="cyan">Config</text>
+
+  <text x="8" y="70" class="label">interval</text>
+  <rect x="128" y="49" width="420" height="25" fill="#666"/>
+  <text x="128" y="70" class="selected">15s</text>
+  <text x="590" y="70" class="hint">Left/Right or -/+ adjusts by 1s</text>
+
+  <text x="8" y="98" class="label">limit</text>
+  <text x="128" y="98" class="value">20</text>
+  <text x="590" y="98" class="hint">Left/Right or -/+ adjusts by 1</text>
+
+  <text x="8" y="126" class="label">cursor</text>
+  <text x="128" y="126" class="value">auto-hide enabled</text>
+  <text x="590" y="126" class="hint">Left/Right toggles</text>
+
+  <text x="8" y="154" class="label">hide after</text>
+  <text x="128" y="154" class="value">5s</text>
+  <text x="590" y="154" class="hint">Left/Right or -/+ adjusts by 1s</text>
+
+  <text x="8" y="182" class="label">columns</text>
+  <text x="128" y="182" class="value">status,title,workflow,branch,event,id,elapsed</text>
+  <rect x="528" y="161" width="12" height="25" fill="#d6d600"/>
+  <text x="590" y="182" class="hint">type to edit, Left/Right moves cursor</text>
+
+  <text x="8" y="250" class="footer">Up/Down selects  Left/Right or -/+ edit  q/Esc cancel  Enter accept</text>
+</svg>

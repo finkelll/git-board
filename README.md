@@ -5,6 +5,16 @@ Live terminal dashboard for GitHub Actions runs.
 `git-board` uses the GitHub CLI for data, so it reuses your existing `gh auth`
 session and repository access.
 
+## Screenshots
+
+Example dashboard using `ProdVision/clinic-os`:
+
+![git-board dashboard](docs/screenshots/dashboard.svg)
+
+Focused config panel:
+
+![git-board config panel](docs/screenshots/config.svg)
+
 ## Requirements
 
 - Rust/Cargo

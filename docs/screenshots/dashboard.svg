@@ -1,0 +1,80 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="360" viewBox="0 0 1280 360" role="img" aria-label="git-board dashboard screenshot">
+  <rect width="1280" height="360" fill="#14191d"/>
+  <style>
+    text { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace; font-size: 18px; }
+    .title { fill: #21c8d4; font-weight: 700; }
+    .time { fill: #d6d600; font-weight: 700; }
+    .head { fill: #6e7279; text-decoration: underline; }
+    .white { fill: #f2f2f2; font-weight: 700; }
+    .muted { fill: #6e7279; }
+    .cyan { fill: #21c8d4; }
+    .green { fill: #67d861; font-weight: 700; }
+    .yellow { fill: #d6d600; font-weight: 700; }
+    .red { fill: #ff6666; font-weight: 700; }
+    .footer { fill: #7d8188; }
+  </style>
+
+  <text x="0" y="24" class="title">=== GitHub Actions ===</text>
+  <text x="0" y="78" class="time">2026-05-29 20:42:18.147</text>
+  <text x="278" y="78" class="yellow">/</text>
+
+  <text x="0" y="126" class="head">STATUS</text>
+  <text x="74" y="126" class="head">TITLE</text>
+  <text x="510" y="126" class="head">WORKFLOW</text>
+  <text x="682" y="126" class="head">BRANCH</text>
+  <text x="925" y="126" class="head">EVENT</text>
+  <text x="1048" y="126" class="head">ID</text>
+  <text x="1158" y="126" class="head">ELAPSED</text>
+  <text x="1236" y="126" class="head">AGE</text>
+
+  <text x="0" y="154" class="yellow">*</text>
+  <text x="74" y="154" class="white">feat(patients): patient-screen changes + bugs</text>
+  <text x="510" y="154" class="white">verify</text>
+  <text x="682" y="154" class="white">main</text>
+  <text x="925" y="154" class="white">push</text>
+  <text x="1048" y="154" class="cyan">26641826570</text>
+  <text x="1158" y="154" class="white">4s</text>
+  <text x="1236" y="154" class="muted">now</text>
+
+  <text x="0" y="182" class="yellow">*</text>
+  <text x="74" y="182" class="white">feat(calendar): appointment details popup fits</text>
+  <text x="510" y="182" class="white">tour</text>
+  <text x="682" y="182" class="white">trello/task-ROZdUE76-task</text>
+  <text x="925" y="182" class="white">pull_request</text>
+  <text x="1048" y="182" class="cyan">26640680056</text>
+  <text x="1158" y="182" class="white">1m4s</text>
+  <text x="1236" y="182" class="muted">2m</text>
+
+  <text x="0" y="210" class="green">✓</text>
+  <text x="74" y="210" class="white">fix(treatments): material-row submit bug</text>
+  <text x="510" y="210" class="white">verify</text>
+  <text x="682" y="210" class="white">main</text>
+  <text x="925" y="210" class="white">push</text>
+  <text x="1048" y="210" class="cyan">26639152432</text>
+  <text x="1158" y="210" class="white">18m40s</text>
+  <text x="1236" y="210" class="muted">22m</text>
+
+  <text x="0" y="238" class="green">✓</text>
+  <text x="74" y="238" class="white">fix(calendar): operating-hours layout</text>
+  <text x="510" y="238" class="white">tour</text>
+  <text x="682" y="238" class="white">trello/task-N1Lf4oGY-development</text>
+  <text x="925" y="238" class="white">pull_request</text>
+  <text x="1048" y="238" class="cyan">26638190187</text>
+  <text x="1158" y="238" class="white">25m6s</text>
+  <text x="1236" y="238" class="muted">1h</text>
+
+  <text x="0" y="266" class="red">✗</text>
+  <text x="74" y="266" class="white">test(e2e): stage smoke checks</text>
+  <text x="510" y="266" class="white">verify</text>
+  <text x="682" y="266" class="white">main</text>
+  <text x="925" y="266" class="white">push</text>
+  <text x="1048" y="266" class="cyan">2663803513</text>
+  <text x="1158" y="266" class="white">29m44s</text>
+  <text x="1236" y="266" class="muted">1h</text>
+
+  <text x="0" y="330" class="footer">repo </text>
+  <text x="48" y="330" class="cyan">ProdVision/clinic-os</text>
+  <text x="262" y="330" class="footer">interval </text>
+  <text x="358" y="330" class="white">15s</text>
+  <text x="410" y="330" class="footer">r refresh  c config  k keys  ↑/↓ select  Enter open  q/Esc quit</text>
+</svg>
