@@ -9,11 +9,11 @@ session and repository access.
 
 Example dashboard using `ProdVision/clinic-os`:
 
-![git-board dashboard](docs/screenshots/dashboard.svg)
+![git-board dashboard](docs/screenshots/dashboard.png)
 
 Focused config panel:
 
-![git-board config panel](docs/screenshots/config.svg)
+![git-board config panel](docs/screenshots/config.png)
 
 ## Requirements
 
@@ -35,6 +35,7 @@ Useful options:
 ```sh
 git-board --repo owner/name --interval 10s --limit 30
 git-board --columns status,title,workflow,branch,event,id,elapsed,age
+git-board --pr-columns status,title,author,branch,base,number,age,updated
 git-board --branch main --workflow verify --status in_progress
 git-board --no-cursor-auto-hide
 git-board --cursor-hide-after 10s
@@ -43,16 +44,17 @@ git-board --cursor-hide-after 10s
 Keys:
 
 - `r`: refresh immediately
+- `TAB`: switch between GitHub Actions and open pull request screens
 - `h`: toggle cursor auto-hide
 - `c`: show focused config panel
 - `k`: show key commands
-- `Up` / `Down`: move selection
-- `Enter`: open the selected run in the browser via `gh run view <id> --web`
-- `q` / `Esc`: close panel / quit
+- `↑` / `↓`: move selection
+- `ENTER`: open the selected run or pull request in the browser
+- `q` / `ESC`: close panel / quit
 
-In the config panel, `Up` / `Down` changes the focused setting, `Left` /
-`Right`, `-`, and `+` edit values, `Left` / `Right` moves the cursor inside
-the columns field, `Enter` accepts the draft settings, and `q` / `Esc` cancels
+In the config panel, `↑` / `↓` changes the focused setting, `←` /
+`→`, `-`, and `+` edit values, `←` / `→` moves the cursor inside
+the columns field, `ENTER` accepts the draft settings, and `q` / `ESC` cancels
 without applying changes.
 
 ## Configuration
@@ -65,6 +67,7 @@ repo = "owner/name"
 interval = "15s"
 limit = 20
 columns = ["status", "title", "workflow", "branch", "event", "id", "elapsed", "age"]
+pr_columns = ["status", "title", "author", "branch", "base", "number", "age", "updated"]
 
 [cursor]
 auto_hide = true

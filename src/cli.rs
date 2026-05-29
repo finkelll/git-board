@@ -24,6 +24,13 @@ pub struct Cli {
     )]
     pub columns: Option<String>,
 
+    #[arg(
+        long = "pr-columns",
+        value_name = "LIST",
+        help = "Comma-separated columns for the pull request screen"
+    )]
+    pub pr_columns: Option<String>,
+
     #[arg(short = 'b', long = "branch")]
     pub branch: Option<String>,
 

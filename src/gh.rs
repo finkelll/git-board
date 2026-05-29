@@ -1,5 +1,5 @@
 use crate::config::{Filters, Settings};
-use crate::model::Run;
+use crate::model::{PullRequest, Run};
 use anyhow::{bail, Context, Result};
 use serde::Deserialize;
 use std::process::Command;
@@ -8,6 +8,8 @@ const JSON_FIELDS: &str = concat!(
     "attempt,conclusion,createdAt,databaseId,displayTitle,event,headBranch,",
     "headSha,name,number,startedAt,status,updatedAt,workflowDatabaseId,workflowName"
 );
+const PR_JSON_FIELDS: &str =
+    "author,baseRefName,createdAt,headRefName,isDraft,number,title,updatedAt";
 
 pub trait CommandRunner {
     fn run(&self, program: &str, args: &[String]) -> Result<String>;
@@ -79,11 +81,33 @@ pub fn fetch_runs(
     parse_runs(&output)
 }
 
+pub fn fetch_pull_requests(
+    repo: &str,
+    settings: &Settings,
+    runner: &impl CommandRunner,
+) -> Result<Vec<PullRequest>> {
+    let args = pr_list_args(repo, settings.limit);
+    let output = runner.run("gh", &args)?;
+    parse_pull_requests(&output)
+}
+
 pub fn open_run(repo: &str, id: u64, runner: &impl CommandRunner) -> Result<()> {
     let args = vec![
         "run".to_string(),
         "view".to_string(),
         id.to_string(),
+        "--repo".to_string(),
+        repo.to_string(),
+        "--web".to_string(),
+    ];
+    runner.run("gh", &args).map(|_| ())
+}
+
+pub fn open_pull_request(repo: &str, number: u64, runner: &impl CommandRunner) -> Result<()> {
+    let args = vec![
+        "pr".to_string(),
+        "view".to_string(),
+        number.to_string(),
         "--repo".to_string(),
         repo.to_string(),
         "--web".to_string(),
@@ -111,6 +135,23 @@ fn run_list_args(repo: &str, limit: usize, filters: &Filters) -> Vec<String> {
     args
 }
 
+fn pr_list_args(repo: &str, limit: usize) -> Vec<String> {
+    vec![
+        "pr".to_string(),
+        "list".to_string(),
+        "--repo".to_string(),
+        repo.to_string(),
+        "--state".to_string(),
+        "open".to_string(),
+        "--search".to_string(),
+        "sort:updated-desc".to_string(),
+        "--limit".to_string(),
+        limit.to_string(),
+        "--json".to_string(),
+        PR_JSON_FIELDS.to_string(),
+    ]
+}
+
 fn push_filter(args: &mut Vec<String>, flag: &str, value: &Option<String>) {
     if let Some(value) = value {
         args.push(flag.to_string());
@@ -120,6 +161,10 @@ fn push_filter(args: &mut Vec<String>, flag: &str, value: &Option<String>) {
 
 fn parse_runs(output: &str) -> Result<Vec<Run>> {
     serde_json::from_str(output).context("failed to parse gh run list JSON")
+}
+
+fn parse_pull_requests(output: &str) -> Result<Vec<PullRequest>> {
+    serde_json::from_str(output).context("failed to parse gh pr list JSON")
 }
 
 #[cfg(test)]
@@ -169,5 +214,35 @@ mod tests {
         let runs = parse_runs(json).unwrap();
         assert_eq!(runs[0].database_id, 123);
         assert_eq!(runs[0].workflow_label(), "verify");
+    }
+
+    #[test]
+    fn builds_pr_list_args_for_open_prs() {
+        let args = pr_list_args("owner/repo", 25);
+
+        assert!(args.windows(2).any(|pair| pair == ["--repo", "owner/repo"]));
+        assert!(args.windows(2).any(|pair| pair == ["--state", "open"]));
+        assert!(args
+            .windows(2)
+            .any(|pair| pair == ["--search", "sort:updated-desc"]));
+        assert!(args.windows(2).any(|pair| pair == ["--limit", "25"]));
+    }
+
+    #[test]
+    fn parses_pull_requests() {
+        let json = r#"[{
+            "author":{"login":"octocat"},
+            "baseRefName":"main",
+            "createdAt":"2026-05-29T14:00:00Z",
+            "headRefName":"feature",
+            "isDraft":false,
+            "number":42,
+            "title":"Add screen",
+            "updatedAt":"2026-05-29T15:00:00Z"
+        }]"#;
+
+        let prs = parse_pull_requests(json).unwrap();
+        assert_eq!(prs[0].number, 42);
+        assert_eq!(prs[0].author_login(), "octocat");
     }
 }

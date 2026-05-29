@@ -1,6 +1,6 @@
-use crate::app::State;
-use crate::columns::Column;
-use crate::model::Run;
+use crate::app::{Screen, State};
+use crate::columns::{Column, PrColumn};
+use crate::model::{PullRequest, Run};
 use crate::panel::{ConfigRow, Panel};
 use crate::timefmt;
 use ratatui::layout::{Alignment, Constraint, Direction, Layout, Rect};
@@ -21,7 +21,10 @@ pub fn draw(frame: &mut Frame<'_>, state: &State) {
         .split(frame.area());
 
     let header = Line::from(Span::styled(
-        "=== GitHub Actions ===",
+        match state.screen {
+            Screen::Runs => "=== GitHub Actions ===",
+            Screen::PullRequests => "=== Open Pull Requests ===",
+        },
         Style::default()
             .fg(Color::Cyan)
             .add_modifier(Modifier::BOLD),
@@ -44,52 +47,10 @@ pub fn draw(frame: &mut Frame<'_>, state: &State) {
     ]);
     frame.render_widget(check_line, chunks[1]);
 
-    let widths = state
-        .settings
-        .columns
-        .iter()
-        .map(|column| Constraint::Length(column.width()))
-        .collect::<Vec<_>>();
-
-    let header = Row::new(
-        state
-            .settings
-            .columns
-            .iter()
-            .map(|column| {
-                Cell::from(column.header()).style(
-                    Style::default()
-                        .fg(Color::DarkGray)
-                        .add_modifier(Modifier::UNDERLINED),
-                )
-            })
-            .collect::<Vec<_>>(),
-    );
-
-    let rows = state.runs.iter().enumerate().map(|(index, run)| {
-        let selected = state.cursor_visible && index == state.selected;
-        let base_style = if selected {
-            Style::default().bg(Color::DarkGray).fg(Color::White)
-        } else {
-            Style::default()
-        };
-
-        Row::new(
-            state
-                .settings
-                .columns
-                .iter()
-                .map(|column| cell_for(*column, run))
-                .collect::<Vec<_>>(),
-        )
-        .style(base_style)
-    });
-
-    let table = Table::new(rows, widths)
-        .header(header)
-        .column_spacing(2)
-        .block(Block::default().borders(Borders::NONE));
-    frame.render_widget(table, chunks[2]);
+    match state.screen {
+        Screen::Runs => render_runs_table(frame, state, chunks[2]),
+        Screen::PullRequests => render_pull_requests_table(frame, state, chunks[2]),
+    }
 
     let footer = footer(state);
     frame.render_widget(footer, chunks[3]);
@@ -99,7 +60,99 @@ pub fn draw(frame: &mut Frame<'_>, state: &State) {
     }
 }
 
-fn cell_for(column: Column, run: &Run) -> Cell<'static> {
+fn render_runs_table(frame: &mut Frame<'_>, state: &State, area: Rect) {
+    let widths = state
+        .settings
+        .columns
+        .iter()
+        .map(|column| Constraint::Length(column.width()))
+        .collect::<Vec<_>>();
+    let header = table_header(state.settings.columns.iter().map(|column| column.header()));
+    let rows = state.runs.iter().enumerate().map(|(index, run)| {
+        let selected = state.cursor_visible && index == state.selected_run;
+        Row::new(
+            state
+                .settings
+                .columns
+                .iter()
+                .map(|column| run_cell_for(*column, run))
+                .collect::<Vec<_>>(),
+        )
+        .style(row_style(selected))
+    });
+    render_table(frame, rows, widths, header, area);
+}
+
+fn render_pull_requests_table(frame: &mut Frame<'_>, state: &State, area: Rect) {
+    let widths = state
+        .settings
+        .pr_columns
+        .iter()
+        .map(|column| Constraint::Length(column.width()))
+        .collect::<Vec<_>>();
+    let header = table_header(
+        state
+            .settings
+            .pr_columns
+            .iter()
+            .map(|column| column.header()),
+    );
+    let rows = state
+        .pull_requests
+        .iter()
+        .enumerate()
+        .map(|(index, pull_request)| {
+            let selected = state.cursor_visible && index == state.selected_pr;
+            Row::new(
+                state
+                    .settings
+                    .pr_columns
+                    .iter()
+                    .map(|column| pull_request_cell_for(*column, pull_request))
+                    .collect::<Vec<_>>(),
+            )
+            .style(row_style(selected))
+        });
+    render_table(frame, rows, widths, header, area);
+}
+
+fn table_header<'a>(labels: impl Iterator<Item = &'a str>) -> Row<'static> {
+    Row::new(
+        labels
+            .map(|label| {
+                Cell::from(label.to_string()).style(
+                    Style::default()
+                        .fg(Color::DarkGray)
+                        .add_modifier(Modifier::UNDERLINED),
+                )
+            })
+            .collect::<Vec<_>>(),
+    )
+}
+
+fn render_table<'a>(
+    frame: &mut Frame<'_>,
+    rows: impl Iterator<Item = Row<'a>>,
+    widths: Vec<Constraint>,
+    header: Row<'static>,
+    area: Rect,
+) {
+    let table = Table::new(rows, widths)
+        .header(header)
+        .column_spacing(2)
+        .block(Block::default().borders(Borders::NONE));
+    frame.render_widget(table, area);
+}
+
+fn row_style(selected: bool) -> Style {
+    if selected {
+        Style::default().bg(Color::DarkGray).fg(Color::White)
+    } else {
+        Style::default()
+    }
+}
+
+fn run_cell_for(column: Column, run: &Run) -> Cell<'static> {
     match column {
         Column::Status => status_cell(run),
         Column::Title => Cell::from(truncate_owned(&run.display_title, 48)).style(
@@ -129,6 +182,30 @@ fn cell_for(column: Column, run: &Run) -> Cell<'static> {
     }
 }
 
+fn pull_request_cell_for(column: PrColumn, pull_request: &PullRequest) -> Cell<'static> {
+    match column {
+        PrColumn::Status => pr_status_cell(pull_request),
+        PrColumn::Title => Cell::from(truncate_owned(&pull_request.title, 48)).style(
+            Style::default()
+                .fg(Color::White)
+                .add_modifier(Modifier::BOLD),
+        ),
+        PrColumn::Author => Cell::from(truncate_owned(pull_request.author_login(), 18))
+            .style(Style::default().fg(Color::White)),
+        PrColumn::Branch => Cell::from(truncate_owned(&pull_request.head_ref_name, 32))
+            .style(Style::default().fg(Color::White)),
+        PrColumn::Base => Cell::from(truncate_owned(&pull_request.base_ref_name, 18))
+            .style(Style::default().fg(Color::White)),
+        PrColumn::Number => {
+            Cell::from(format!("#{}", pull_request.number)).style(Style::default().fg(Color::Cyan))
+        }
+        PrColumn::Age => Cell::from(timefmt::age(pull_request.created_at))
+            .style(Style::default().fg(Color::DarkGray)),
+        PrColumn::Updated => Cell::from(timefmt::age(pull_request.updated_at))
+            .style(Style::default().fg(Color::DarkGray)),
+    }
+}
+
 fn status_cell(run: &Run) -> Cell<'static> {
     let label = run.status_label();
     let (symbol, color) = match label {
@@ -140,6 +217,14 @@ fn status_cell(run: &Run) -> Cell<'static> {
         "skipped" | "neutral" | "stale" => ("-", Color::DarkGray),
         _ if run.status != "completed" => ("*", Color::Yellow),
         _ => ("?", Color::Magenta),
+    };
+    Cell::from(symbol).style(Style::default().fg(color).add_modifier(Modifier::BOLD))
+}
+
+fn pr_status_cell(pull_request: &PullRequest) -> Cell<'static> {
+    let (symbol, color) = match pull_request.status_label() {
+        "draft" => ("D", Color::Yellow),
+        _ => ("O", Color::Green),
     };
     Cell::from(symbol).style(Style::default().fg(color).add_modifier(Modifier::BOLD))
 }
@@ -166,7 +251,14 @@ fn footer(state: &State) -> Line<'static> {
     }
 
     spans.push(Span::styled(
-        "r refresh  c config  k keys  ↑/↓ select  Enter open  q/Esc quit",
+        match state.screen {
+            Screen::Runs => {
+                "TAB PRs  r refresh  c config  k keys  ↑/↓ select  ENTER open run  q/ESC quit"
+            }
+            Screen::PullRequests => {
+                "TAB Actions  r refresh  c config  k keys  ↑/↓ select  ENTER open PR  q/ESC quit"
+            }
+        },
         Style::default().fg(Color::DarkGray),
     ));
 
@@ -309,15 +401,27 @@ fn config_value(row: ConfigRow, state: &State) -> String {
             },
             |draft| draft.columns.clone(),
         ),
+        ConfigRow::PrColumns => draft.map_or_else(
+            || {
+                state
+                    .settings
+                    .pr_columns
+                    .iter()
+                    .map(ToString::to_string)
+                    .collect::<Vec<_>>()
+                    .join(",")
+            },
+            |draft| draft.pr_columns.clone(),
+        ),
     }
 }
 
 fn panel_footer(panel: Panel) -> Line<'static> {
     let text = match panel.kind {
         crate::panel::PanelKind::Config => {
-            "Up/Down selects  Left/Right or -/+ edit  q/Esc cancel  Enter accept"
+            "↑/↓ selects  ←/→ or -/+ edit  q/ESC cancel  ENTER accept"
         }
-        crate::panel::PanelKind::Keys => "q / Esc closes this panel",
+        crate::panel::PanelKind::Keys => "q / ESC closes this panel",
     };
     Line::from(Span::styled(text, Style::default().fg(Color::DarkGray)))
 }

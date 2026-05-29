@@ -1,7 +1,7 @@
-use crate::columns::parse_columns_csv;
+use crate::columns::{parse_columns_csv, parse_pr_columns_csv};
 use crate::config::{CursorSettings, Settings};
 use crate::gh::{self, SystemRunner};
-use crate::model::Run;
+use crate::model::{PullRequest, Run};
 use crate::panel::{ConfigRow, Panel, PanelKind};
 use crate::ui;
 use anyhow::Result;
@@ -40,8 +40,11 @@ pub fn run(settings: Settings) -> Result<()> {
 #[derive(Debug)]
 pub struct State {
     pub repo: String,
+    pub screen: Screen,
     pub runs: Vec<Run>,
-    pub selected: usize,
+    pub pull_requests: Vec<PullRequest>,
+    pub selected_run: usize,
+    pub selected_pr: usize,
     pub cursor_visible: bool,
     pub last_check: Option<DateTime<Local>>,
     pub loading: bool,
@@ -54,11 +57,18 @@ pub struct State {
     pub settings: Settings,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Screen {
+    Runs,
+    PullRequests,
+}
+
 #[derive(Debug, Clone)]
 pub struct ConfigDraft {
     pub interval: Duration,
     pub limit: usize,
     pub columns: String,
+    pub pr_columns: String,
     pub cursor: CursorSettings,
 }
 
@@ -70,6 +80,13 @@ impl ConfigDraft {
             columns: state
                 .settings
                 .columns
+                .iter()
+                .map(ToString::to_string)
+                .collect::<Vec<_>>()
+                .join(","),
+            pr_columns: state
+                .settings
+                .pr_columns
                 .iter()
                 .map(ToString::to_string)
                 .collect::<Vec<_>>()
@@ -86,8 +103,11 @@ fn run_loop(
 ) -> Result<()> {
     let mut state = State {
         repo,
+        screen: Screen::Runs,
         runs: Vec::new(),
-        selected: 0,
+        pull_requests: Vec::new(),
+        selected_run: 0,
+        selected_pr: 0,
         cursor_visible: false,
         last_check: None,
         loading: false,
@@ -131,7 +151,8 @@ fn run_loop(
                     state.last_check = Some(Local::now());
                     match result {
                         Ok(runs) => {
-                            state.runs = runs;
+                            state.runs = runs.runs;
+                            state.pull_requests = runs.pull_requests;
                             state.error = None;
                             clamp_selection(&mut state);
                         }
@@ -191,33 +212,59 @@ fn handle_key(
             *next_refresh = Instant::now();
             false
         }
+        KeyCode::Tab => {
+            state.screen = match state.screen {
+                Screen::Runs => Screen::PullRequests,
+                Screen::PullRequests => Screen::Runs,
+            };
+            state.cursor_visible = true;
+            *last_navigation_at = Some(Instant::now());
+            false
+        }
         KeyCode::Char('h') => {
             toggle_cursor_auto_hide(state, last_navigation_at);
             false
         }
         KeyCode::Up => {
             if state.cursor_visible {
-                state.selected = state.selected.saturating_sub(1);
+                let selected = selected_mut(state);
+                *selected = selected.saturating_sub(1);
             }
             state.cursor_visible = true;
             *last_navigation_at = Some(Instant::now());
             false
         }
         KeyCode::Down => {
-            if state.cursor_visible && state.selected + 1 < state.runs.len() {
-                state.selected += 1;
+            let len = selected_len(state);
+            let cursor_visible = state.cursor_visible;
+            let selected = selected_mut(state);
+            if cursor_visible && *selected + 1 < len {
+                *selected += 1;
             }
             state.cursor_visible = true;
             *last_navigation_at = Some(Instant::now());
             false
         }
         KeyCode::Enter => {
-            if let Some(run) = state.runs.get(state.selected) {
-                let repo = state.repo.clone();
-                let id = run.database_id;
-                thread::spawn(move || {
-                    let _ = gh::open_run(&repo, id, &SystemRunner);
-                });
+            match state.screen {
+                Screen::Runs => {
+                    if let Some(run) = state.runs.get(state.selected_run) {
+                        let repo = state.repo.clone();
+                        let id = run.database_id;
+                        thread::spawn(move || {
+                            let _ = gh::open_run(&repo, id, &SystemRunner);
+                        });
+                    }
+                }
+                Screen::PullRequests => {
+                    if let Some(pr) = state.pull_requests.get(state.selected_pr) {
+                        let repo = state.repo.clone();
+                        let number = pr.number;
+                        thread::spawn(move || {
+                            let _ = gh::open_pull_request(&repo, number, &SystemRunner);
+                        });
+                    }
+                }
             }
             false
         }
@@ -259,10 +306,10 @@ fn handle_config_key(key: KeyEvent, state: &mut State, next_refresh: &mut Instan
             }
             sync_text_cursor_to_focus(state);
         }
-        KeyCode::Left if ConfigRow::from_index(state.config_focus) == ConfigRow::Columns => {
+        KeyCode::Left if ConfigRow::from_index(state.config_focus).is_text_field() => {
             state.config_text_cursor = state.config_text_cursor.saturating_sub(1);
         }
-        KeyCode::Right if ConfigRow::from_index(state.config_focus) == ConfigRow::Columns => {
+        KeyCode::Right if ConfigRow::from_index(state.config_focus).is_text_field() => {
             move_text_cursor_right(state);
         }
         KeyCode::Left | KeyCode::Char('-') => edit_config_row(state, -1),
@@ -271,7 +318,7 @@ fn handle_config_key(key: KeyEvent, state: &mut State, next_refresh: &mut Instan
             apply_config_draft(state, next_refresh);
         }
         KeyCode::Backspace => edit_config_text(state, None),
-        KeyCode::Char(ch) if ConfigRow::from_index(state.config_focus) == ConfigRow::Columns => {
+        KeyCode::Char(ch) if ConfigRow::from_index(state.config_focus).is_text_field() => {
             edit_config_text(state, Some(ch))
         }
         _ => {}
@@ -296,9 +343,10 @@ fn edit_config_row(state: &mut State, direction: i32) {
             draft.cursor.hide_after = adjust_seconds(draft.cursor.hide_after, direction, 1, 300);
         }
         ConfigRow::Columns => {}
+        ConfigRow::PrColumns => {}
     }
 
-    if focused == ConfigRow::Columns {
+    if focused.is_text_field() {
         state.error = None;
     }
 }
@@ -318,6 +366,7 @@ fn edit_config_text(state: &mut State, ch: Option<char>) {
 
     let value = match focused {
         ConfigRow::Columns => &mut draft.columns,
+        ConfigRow::PrColumns => &mut draft.pr_columns,
         _ => return,
     };
 
@@ -348,10 +397,18 @@ fn apply_config_draft(state: &mut State, next_refresh: &mut Instant) {
             return;
         }
     };
+    let pr_columns = match parse_pr_columns_csv(&draft.pr_columns) {
+        Ok(columns) => columns,
+        Err(error) => {
+            state.error = Some(error.to_string());
+            return;
+        }
+    };
 
     state.settings.interval = draft.interval;
     state.settings.limit = draft.limit;
     state.settings.columns = columns;
+    state.settings.pr_columns = pr_columns;
     state.settings.cursor = draft.cursor;
     state.panel = None;
     state.config_draft = None;
@@ -363,27 +420,30 @@ fn apply_config_draft(state: &mut State, next_refresh: &mut Instant) {
 fn open_config_panel(state: &mut State) {
     state.config_focus = 0;
     state.config_draft = Some(ConfigDraft::from_state(state));
-    state.config_text_cursor = state
-        .config_draft
-        .as_ref()
-        .map_or(0, |draft| draft.columns.chars().count());
+    state.config_text_cursor = state.config_draft.as_ref().map_or(0, |draft| {
+        draft_text_for_focus(draft, state.config_focus)
+            .chars()
+            .count()
+    });
     state.panel = Some(Panel::config());
 }
 
 fn sync_text_cursor_to_focus(state: &mut State) {
-    if ConfigRow::from_index(state.config_focus) == ConfigRow::Columns {
-        state.config_text_cursor = state
-            .config_draft
-            .as_ref()
-            .map_or(0, |draft| draft.columns.chars().count());
+    if ConfigRow::from_index(state.config_focus).is_text_field() {
+        state.config_text_cursor = state.config_draft.as_ref().map_or(0, |draft| {
+            draft_text_for_focus(draft, state.config_focus)
+                .chars()
+                .count()
+        });
     }
 }
 
 fn move_text_cursor_right(state: &mut State) {
-    let max = state
-        .config_draft
-        .as_ref()
-        .map_or(0, |draft| draft.columns.chars().count());
+    let max = state.config_draft.as_ref().map_or(0, |draft| {
+        draft_text_for_focus(draft, state.config_focus)
+            .chars()
+            .count()
+    });
     if state.config_text_cursor < max {
         state.config_text_cursor += 1;
     }
@@ -429,12 +489,25 @@ fn adjust_usize(value: usize, direction: i32, min: usize, max: usize) -> usize {
     next.clamp(min, max)
 }
 
-type FetchResult = anyhow::Result<Vec<Run>>;
+#[derive(Debug)]
+struct DashboardData {
+    runs: Vec<Run>,
+    pull_requests: Vec<PullRequest>,
+}
+
+type FetchResult = anyhow::Result<DashboardData>;
 
 fn spawn_fetch(repo: String, settings: Settings) -> Receiver<FetchResult> {
     let (tx, rx) = mpsc::channel();
     thread::spawn(move || {
-        let result = gh::fetch_runs(&repo, &settings, &SystemRunner);
+        let result = gh::fetch_runs(&repo, &settings, &SystemRunner).and_then(|runs| {
+            gh::fetch_pull_requests(&repo, &settings, &SystemRunner).map(|pull_requests| {
+                DashboardData {
+                    runs,
+                    pull_requests,
+                }
+            })
+        });
         let _ = tx.send(result);
     });
     rx
@@ -442,8 +515,36 @@ fn spawn_fetch(repo: String, settings: Settings) -> Receiver<FetchResult> {
 
 fn clamp_selection(state: &mut State) {
     if state.runs.is_empty() {
-        state.selected = 0;
-    } else if state.selected >= state.runs.len() {
-        state.selected = state.runs.len() - 1;
+        state.selected_run = 0;
+    } else if state.selected_run >= state.runs.len() {
+        state.selected_run = state.runs.len() - 1;
+    }
+
+    if state.pull_requests.is_empty() {
+        state.selected_pr = 0;
+    } else if state.selected_pr >= state.pull_requests.len() {
+        state.selected_pr = state.pull_requests.len() - 1;
+    }
+}
+
+fn selected_mut(state: &mut State) -> &mut usize {
+    match state.screen {
+        Screen::Runs => &mut state.selected_run,
+        Screen::PullRequests => &mut state.selected_pr,
+    }
+}
+
+fn selected_len(state: &State) -> usize {
+    match state.screen {
+        Screen::Runs => state.runs.len(),
+        Screen::PullRequests => state.pull_requests.len(),
+    }
+}
+
+fn draft_text_for_focus(draft: &ConfigDraft, focus: usize) -> &str {
+    match ConfigRow::from_index(focus) {
+        ConfigRow::Columns => &draft.columns,
+        ConfigRow::PrColumns => &draft.pr_columns,
+        _ => "",
     }
 }

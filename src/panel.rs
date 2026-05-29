@@ -11,15 +11,17 @@ pub enum ConfigRow {
     CursorAutoHide,
     CursorHideAfter,
     Columns,
+    PrColumns,
 }
 
 impl ConfigRow {
-    pub const ROWS: [Self; 5] = [
+    pub const ROWS: [Self; 6] = [
         Self::Interval,
         Self::Limit,
         Self::CursorAutoHide,
         Self::CursorHideAfter,
         Self::Columns,
+        Self::PrColumns,
     ];
 
     pub fn from_index(index: usize) -> Self {
@@ -37,21 +39,27 @@ impl ConfigRow {
             Self::CursorAutoHide => "cursor",
             Self::CursorHideAfter => "hide after",
             Self::Columns => "columns",
+            Self::PrColumns => "PR columns",
         }
     }
 
     pub fn hint(self) -> &'static str {
         match self {
-            Self::Interval => "Left/Right or -/+ adjusts by 1s",
-            Self::Limit => "Left/Right or -/+ adjusts by 1",
-            Self::CursorAutoHide => "Left/Right toggles",
-            Self::CursorHideAfter => "Left/Right or -/+ adjusts by 1s",
-            Self::Columns => "type to edit, Left/Right moves cursor",
+            Self::Interval => "←/→ or -/+ adjusts by 1s",
+            Self::Limit => "←/→ or -/+ adjusts by 1",
+            Self::CursorAutoHide => "←/→ toggles",
+            Self::CursorHideAfter => "←/→ or -/+ adjusts by 1s",
+            Self::Columns => "type to edit, ←/→ moves cursor",
+            Self::PrColumns => "type to edit, ←/→ moves cursor",
         }
     }
 
     pub fn editable(self) -> bool {
         true
+    }
+
+    pub fn is_text_field(self) -> bool {
+        matches!(self, Self::Columns | Self::PrColumns)
     }
 }
 
@@ -85,10 +93,11 @@ impl Panel {
             PanelKind::Keys => &[
                 ("r", "Refresh immediately"),
                 ("h", "Toggle cursor auto-hide"),
+                ("TAB", "Switch between Actions and pull request screens"),
                 ("c", "Open config panel"),
                 ("k", "Show key commands"),
-                ("Up / Down", "Show or move the navigation cursor"),
-                ("Enter", "Open selected workflow run in browser"),
+                ("↑ / ↓", "Show or move the navigation cursor"),
+                ("ENTER", "Open selected run or pull request in browser"),
             ],
             PanelKind::Config => &[],
         }

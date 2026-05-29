@@ -14,6 +14,18 @@ pub enum Column {
     Age,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PrColumn {
+    Status,
+    Title,
+    Author,
+    Branch,
+    Base,
+    Number,
+    Age,
+    Updated,
+}
+
 impl Column {
     pub fn default_columns() -> Vec<Self> {
         vec![
@@ -59,6 +71,51 @@ impl Column {
     }
 }
 
+impl PrColumn {
+    pub fn default_columns() -> Vec<Self> {
+        vec![
+            Self::Status,
+            Self::Title,
+            Self::Author,
+            Self::Branch,
+            Self::Base,
+            Self::Number,
+            Self::Age,
+            Self::Updated,
+        ]
+    }
+
+    pub fn header(self) -> &'static str {
+        match self {
+            Self::Status => "STATUS",
+            Self::Title => "TITLE",
+            Self::Author => "AUTHOR",
+            Self::Branch => "BRANCH",
+            Self::Base => "BASE",
+            Self::Number => "PR",
+            Self::Age => "AGE",
+            Self::Updated => "UPDATED",
+        }
+    }
+
+    pub fn width(self) -> u16 {
+        match self {
+            Self::Status => 8,
+            Self::Title => 50,
+            Self::Author => 18,
+            Self::Branch => 34,
+            Self::Base => 18,
+            Self::Number => 8,
+            Self::Age => 24,
+            Self::Updated => 24,
+        }
+    }
+
+    pub fn all_names() -> &'static str {
+        "status,title,author,branch,base,number,age,updated"
+    }
+}
+
 impl fmt::Display for Column {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let name = match self {
@@ -96,6 +153,43 @@ impl FromStr for Column {
     }
 }
 
+impl fmt::Display for PrColumn {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let name = match self {
+            Self::Status => "status",
+            Self::Title => "title",
+            Self::Author => "author",
+            Self::Branch => "branch",
+            Self::Base => "base",
+            Self::Number => "number",
+            Self::Age => "age",
+            Self::Updated => "updated",
+        };
+        f.write_str(name)
+    }
+}
+
+impl FromStr for PrColumn {
+    type Err = anyhow::Error;
+
+    fn from_str(value: &str) -> Result<Self> {
+        match value.trim().to_ascii_lowercase().as_str() {
+            "status" => Ok(Self::Status),
+            "title" => Ok(Self::Title),
+            "author" => Ok(Self::Author),
+            "branch" => Ok(Self::Branch),
+            "base" => Ok(Self::Base),
+            "number" | "pr" => Ok(Self::Number),
+            "age" => Ok(Self::Age),
+            "updated" => Ok(Self::Updated),
+            other => bail!(
+                "unknown PR column '{other}'. Valid columns: {}",
+                Self::all_names()
+            ),
+        }
+    }
+}
+
 pub fn parse_columns_csv(value: &str) -> Result<Vec<Column>> {
     let columns = value
         .split(',')
@@ -117,6 +211,32 @@ pub fn parse_columns_list(values: &[String]) -> Result<Vec<Column>> {
 
     if columns.is_empty() {
         bail!("at least one column must be configured");
+    }
+
+    Ok(columns)
+}
+
+pub fn parse_pr_columns_csv(value: &str) -> Result<Vec<PrColumn>> {
+    let columns = value
+        .split(',')
+        .map(PrColumn::from_str)
+        .collect::<Result<Vec<_>>>()?;
+
+    if columns.is_empty() {
+        bail!("at least one PR column must be configured");
+    }
+
+    Ok(columns)
+}
+
+pub fn parse_pr_columns_list(values: &[String]) -> Result<Vec<PrColumn>> {
+    let columns = values
+        .iter()
+        .map(|value| PrColumn::from_str(value))
+        .collect::<Result<Vec<_>>>()?;
+
+    if columns.is_empty() {
+        bail!("at least one PR column must be configured");
     }
 
     Ok(columns)

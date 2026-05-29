@@ -1,5 +1,8 @@
 use crate::cli::Cli;
-use crate::columns::{parse_columns_csv, parse_columns_list, Column};
+use crate::columns::{
+    parse_columns_csv, parse_columns_list, parse_pr_columns_csv, parse_pr_columns_list, Column,
+    PrColumn,
+};
 use anyhow::{bail, Context, Result};
 use serde::Deserialize;
 use std::env;
@@ -19,6 +22,7 @@ pub struct Settings {
     pub interval: Duration,
     pub limit: usize,
     pub columns: Vec<Column>,
+    pub pr_columns: Vec<PrColumn>,
     pub filters: Filters,
     pub cursor: CursorSettings,
 }
@@ -43,6 +47,7 @@ struct FileConfig {
     interval: Option<String>,
     limit: Option<usize>,
     columns: Option<Vec<String>>,
+    pr_columns: Option<Vec<String>>,
     filters: Option<FileFilters>,
     cursor: Option<FileCursor>,
 }
@@ -79,6 +84,11 @@ impl Settings {
             (None, Some(values)) => parse_columns_list(&values)?,
             (None, None) => Column::default_columns(),
         };
+        let pr_columns = match (args.pr_columns, file.pr_columns) {
+            (Some(value), _) => parse_pr_columns_csv(&value)?,
+            (None, Some(values)) => parse_pr_columns_list(&values)?,
+            (None, None) => PrColumn::default_columns(),
+        };
 
         let file_filters = file.filters.unwrap_or_default();
         let file_cursor = file.cursor.unwrap_or_default();
@@ -97,6 +107,7 @@ impl Settings {
             interval,
             limit: args.limit.or(file.limit).unwrap_or(DEFAULT_LIMIT),
             columns,
+            pr_columns,
             filters: Filters {
                 branch: non_empty(args.branch).or_else(|| non_empty(file_filters.branch)),
                 workflow: non_empty(args.workflow).or_else(|| non_empty(file_filters.workflow)),
