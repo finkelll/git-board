@@ -2,6 +2,7 @@
 pub enum PanelKind {
     Keys,
     Config,
+    QuickLook,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -81,10 +82,17 @@ impl Panel {
         }
     }
 
+    pub fn quick_look() -> Self {
+        Self {
+            kind: PanelKind::QuickLook,
+        }
+    }
+
     pub fn title(self) -> &'static str {
         match self.kind {
             PanelKind::Keys => "Key Commands",
             PanelKind::Config => "Config",
+            PanelKind::QuickLook => "Quick Look",
         }
     }
 
@@ -93,13 +101,14 @@ impl Panel {
             PanelKind::Keys => &[
                 ("r", "Refresh immediately"),
                 ("h", "Toggle cursor auto-hide"),
-                ("TAB", "Switch between Actions and pull request screens"),
+                ("⇥", "Switch between Actions and pull request screens"),
                 ("c", "Open config panel"),
                 ("k", "Show key commands"),
+                ("␣", "Quick look at selected row"),
                 ("↑ / ↓", "Show or move the navigation cursor"),
-                ("ENTER", "Open selected run or pull request in browser"),
+                ("↵", "Open selected run or pull request in browser"),
             ],
-            PanelKind::Config => &[],
+            PanelKind::Config | PanelKind::QuickLook => &[],
         }
     }
 }

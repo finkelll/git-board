@@ -44,17 +44,21 @@ git-board --cursor-hide-after 10s
 Keys:
 
 - `r`: refresh immediately
-- `TAB`: switch between GitHub Actions and open pull request screens
+- `⇥`: switch between GitHub Actions and open pull request screens
 - `h`: toggle cursor auto-hide
 - `c`: show focused config panel
 - `k`: show key commands
+- `␣`: quick look at the selected row
 - `↑` / `↓`: move selection
-- `ENTER`: open the selected run or pull request in the browser
+- `↵`: open the selected run or pull request in the browser
 - `q` / `ESC`: close panel / quit
+
+In the quick look panel, `↑` / `↓` scrolls overflowing row data, and
+`␣`, `q`, or `ESC` closes it.
 
 In the config panel, `↑` / `↓` changes the focused setting, `←` /
 `→`, `-`, and `+` edit values, `←` / `→` moves the cursor inside
-the columns field, `ENTER` accepts the draft settings, and `q` / `ESC` cancels
+the columns field, `↵` accepts the draft settings, and `q` / `ESC` cancels
 without applying changes.
 
 ## Configuration

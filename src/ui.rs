@@ -1,66 +1,102 @@
 use crate::app::{Screen, State};
 use crate::columns::{Column, PrColumn};
 use crate::model::{PullRequest, Run};
-use crate::panel::{ConfigRow, Panel};
+use crate::panel::{ConfigRow, Panel, PanelKind};
 use crate::timefmt;
 use ratatui::layout::{Alignment, Constraint, Direction, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, Borders, Cell, Clear, Paragraph, Row, Table, Wrap};
+use ratatui::widgets::{Block, Borders, Cell, Clear, Paragraph, Row, Table, TableState, Wrap};
 use ratatui::Frame;
 
-pub fn draw(frame: &mut Frame<'_>, state: &State) {
-    let chunks = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints([
-            Constraint::Length(1),
-            Constraint::Length(2),
-            Constraint::Min(5),
-            Constraint::Length(1),
-        ])
-        .split(frame.area());
-
-    let header = Line::from(Span::styled(
-        match state.screen {
-            Screen::Runs => "=== GitHub Actions ===",
-            Screen::PullRequests => "=== Open Pull Requests ===",
-        },
-        Style::default()
-            .fg(Color::Cyan)
-            .add_modifier(Modifier::BOLD),
-    ));
-    frame.render_widget(header, chunks[0]);
-
+pub fn draw(frame: &mut Frame<'_>, state: &mut State) {
+    let area = frame.area();
+    let title = match state.screen {
+        Screen::Runs => "=== GitHub Actions ===",
+        Screen::PullRequests => "=== Open Pull Requests ===",
+    };
     let last_check = state
         .last_check
         .map(|time| time.format("%Y-%m-%d %H:%M:%S%.3f").to_string())
         .unwrap_or_else(|| "not checked yet".to_string());
-    let check_line = Line::from(vec![
-        Span::styled(
-            last_check,
-            Style::default()
-                .fg(Color::Yellow)
-                .add_modifier(Modifier::BOLD),
-        ),
-        Span::raw("  "),
-        Span::styled(refresh_indicator(state), Style::default().fg(Color::Yellow)),
-    ]);
-    frame.render_widget(check_line, chunks[1]);
+    let refresh = refresh_indicator(state);
+    let inline_header =
+        title.chars().count() + last_check.chars().count() + refresh.chars().count() + 4
+            <= usize::from(area.width);
+
+    let (table_area, footer_area) = if inline_header {
+        let chunks = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([
+                Constraint::Length(1),
+                Constraint::Min(5),
+                Constraint::Length(1),
+            ])
+            .split(area);
+        frame.render_widget(header_line(title, &last_check, refresh, true), chunks[0]);
+        (chunks[1], chunks[2])
+    } else {
+        let chunks = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([
+                Constraint::Length(1),
+                Constraint::Length(1),
+                Constraint::Min(5),
+                Constraint::Length(1),
+            ])
+            .split(area);
+        frame.render_widget(header_line(title, &last_check, refresh, false), chunks[0]);
+        frame.render_widget(check_line(&last_check, refresh), chunks[1]);
+        (chunks[2], chunks[3])
+    };
 
     match state.screen {
-        Screen::Runs => render_runs_table(frame, state, chunks[2]),
-        Screen::PullRequests => render_pull_requests_table(frame, state, chunks[2]),
+        Screen::Runs => render_runs_table(frame, state, table_area),
+        Screen::PullRequests => render_pull_requests_table(frame, state, table_area),
     }
 
     let footer = footer(state);
-    frame.render_widget(footer, chunks[3]);
+    frame.render_widget(footer, footer_area);
 
     if let Some(panel) = state.panel {
         render_panel(frame, panel, state);
     }
 }
 
-fn render_runs_table(frame: &mut Frame<'_>, state: &State, area: Rect) {
+fn header_line(title: &str, last_check: &str, refresh: &str, include_check: bool) -> Line<'static> {
+    let mut spans = vec![Span::styled(
+        title.to_string(),
+        Style::default()
+            .fg(Color::Cyan)
+            .add_modifier(Modifier::BOLD),
+    )];
+
+    if include_check {
+        spans.push(Span::raw("  "));
+        spans.extend(check_spans(last_check, refresh));
+    }
+
+    Line::from(spans)
+}
+
+fn check_line(last_check: &str, refresh: &str) -> Line<'static> {
+    Line::from(check_spans(last_check, refresh))
+}
+
+fn check_spans(last_check: &str, refresh: &str) -> Vec<Span<'static>> {
+    vec![
+        Span::styled(
+            last_check.to_string(),
+            Style::default()
+                .fg(Color::Yellow)
+                .add_modifier(Modifier::BOLD),
+        ),
+        Span::raw("  "),
+        Span::styled(refresh.to_string(), Style::default().fg(Color::Yellow)),
+    ]
+}
+
+fn render_runs_table(frame: &mut Frame<'_>, state: &mut State, area: Rect) {
     let widths = state
         .settings
         .columns
@@ -80,10 +116,18 @@ fn render_runs_table(frame: &mut Frame<'_>, state: &State, area: Rect) {
         )
         .style(row_style(selected))
     });
-    render_table(frame, rows, widths, header, area);
+    render_table(
+        frame,
+        rows,
+        widths,
+        header,
+        state.cursor_visible.then_some(state.selected_run),
+        &mut state.runs_scroll,
+        area,
+    );
 }
 
-fn render_pull_requests_table(frame: &mut Frame<'_>, state: &State, area: Rect) {
+fn render_pull_requests_table(frame: &mut Frame<'_>, state: &mut State, area: Rect) {
     let widths = state
         .settings
         .pr_columns
@@ -113,7 +157,15 @@ fn render_pull_requests_table(frame: &mut Frame<'_>, state: &State, area: Rect) 
             )
             .style(row_style(selected))
         });
-    render_table(frame, rows, widths, header, area);
+    render_table(
+        frame,
+        rows,
+        widths,
+        header,
+        state.cursor_visible.then_some(state.selected_pr),
+        &mut state.prs_scroll,
+        area,
+    );
 }
 
 fn table_header<'a>(labels: impl Iterator<Item = &'a str>) -> Row<'static> {
@@ -135,13 +187,19 @@ fn render_table<'a>(
     rows: impl Iterator<Item = Row<'a>>,
     widths: Vec<Constraint>,
     header: Row<'static>,
+    selected: Option<usize>,
+    scroll: &mut usize,
     area: Rect,
 ) {
     let table = Table::new(rows, widths)
         .header(header)
         .column_spacing(2)
         .block(Block::default().borders(Borders::NONE));
-    frame.render_widget(table, area);
+    let mut table_state = TableState::new()
+        .with_offset(*scroll)
+        .with_selected(selected);
+    frame.render_stateful_widget(table, area, &mut table_state);
+    *scroll = table_state.offset();
 }
 
 fn row_style(selected: bool) -> Style {
@@ -253,10 +311,10 @@ fn footer(state: &State) -> Line<'static> {
     spans.push(Span::styled(
         match state.screen {
             Screen::Runs => {
-                "TAB PRs  r refresh  c config  k keys  ↑/↓ select  ENTER open run  q/ESC quit"
+                "⇥ PRs  r refresh  c config  k keys  ␣ quick look  ↑/↓ select  ↵ open run  q/ESC quit"
             }
             Screen::PullRequests => {
-                "TAB Actions  r refresh  c config  k keys  ↑/↓ select  ENTER open PR  q/ESC quit"
+                "⇥ Actions  r refresh  c config  k keys  ␣ quick look  ↑/↓ select  ↵ open PR  q/ESC quit"
             }
         },
         Style::default().fg(Color::DarkGray),
@@ -278,23 +336,45 @@ fn refresh_indicator(state: &State) -> &'static str {
     }
 }
 
-fn render_panel(frame: &mut Frame<'_>, panel: Panel, state: &State) {
+fn render_panel(frame: &mut Frame<'_>, panel: Panel, state: &mut State) {
     let area = centered_rect(72, 58, frame.area());
     frame.render_widget(Clear, area);
 
     let lines = panel_lines(panel, state);
+    let footer = panel_footer(panel);
+    let block = Block::default()
+        .title(panel.title())
+        .title_alignment(Alignment::Center)
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(Color::Cyan));
 
-    let paragraph = Paragraph::new(lines)
-        .block(
-            Block::default()
-                .title(panel.title())
-                .title_alignment(Alignment::Center)
-                .borders(Borders::ALL)
-                .border_style(Style::default().fg(Color::Cyan)),
-        )
+    if panel.kind != PanelKind::QuickLook {
+        let paragraph = Paragraph::new(lines)
+            .block(block)
+            .style(Style::default().bg(Color::Black))
+            .wrap(Wrap { trim: true });
+        frame.render_widget(paragraph, area);
+        return;
+    }
+
+    let inner = block.inner(area);
+    frame.render_widget(block.style(Style::default().bg(Color::Black)), area);
+    let chunks = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Min(1), Constraint::Length(1)])
+        .split(inner);
+    let visible_lines = usize::from(chunks[0].height);
+    let max_scroll = lines.len().saturating_sub(visible_lines);
+    state.quick_look_scroll = state.quick_look_scroll.min(max_scroll);
+    let body = Paragraph::new(lines)
         .style(Style::default().bg(Color::Black))
+        .scroll((state.quick_look_scroll as u16, 0))
         .wrap(Wrap { trim: true });
-    frame.render_widget(paragraph, area);
+    frame.render_widget(body, chunks[0]);
+    frame.render_widget(
+        Paragraph::new(footer).style(Style::default().bg(Color::Black)),
+        chunks[1],
+    );
 }
 
 fn panel_lines(panel: Panel, state: &State) -> Vec<Line<'static>> {
@@ -305,12 +385,82 @@ fn panel_lines(panel: Panel, state: &State) -> Vec<Line<'static>> {
         .collect::<Vec<_>>();
 
     if lines.is_empty() {
-        lines = config_lines(state);
+        lines = match panel.kind {
+            PanelKind::Config => config_lines(state),
+            PanelKind::QuickLook => quick_look_lines(state),
+            PanelKind::Keys => Vec::new(),
+        };
     }
 
-    lines.push(Line::from(""));
-    lines.push(panel_footer(panel));
+    if panel.kind != PanelKind::QuickLook {
+        lines.push(Line::from(""));
+        lines.push(panel_footer(panel));
+    }
     lines
+}
+
+fn quick_look_lines(state: &State) -> Vec<Line<'static>> {
+    match state.screen {
+        Screen::Runs => state.runs.get(state.selected_run).map_or_else(
+            || vec![value_line("status", "No run selected")],
+            run_detail_lines,
+        ),
+        Screen::PullRequests => state.pull_requests.get(state.selected_pr).map_or_else(
+            || vec![value_line("status", "No pull request selected")],
+            pull_request_detail_lines,
+        ),
+    }
+}
+
+fn run_detail_lines(run: &Run) -> Vec<Line<'static>> {
+    vec![
+        value_line("status", run.status_label()),
+        value_line("conclusion", run.conclusion.as_deref().unwrap_or("")),
+        value_line("title", &run.display_title),
+        value_line("workflow", run.workflow_label()),
+        value_line("branch", &run.head_branch),
+        value_line("event", &run.event),
+        value_line("id", &run.database_id.to_string()),
+        value_line("created", &run.created_at.to_rfc3339()),
+        value_line(
+            "started",
+            &run.started_at
+                .map_or_else(String::new, |time| time.to_rfc3339()),
+        ),
+        value_line("updated", &run.updated_at.to_rfc3339()),
+        value_line(
+            "elapsed",
+            &timefmt::elapsed(run.started_at, run.updated_at, &run.status),
+        ),
+        value_line("age", &timefmt::age(run.created_at)),
+    ]
+}
+
+fn pull_request_detail_lines(pull_request: &PullRequest) -> Vec<Line<'static>> {
+    vec![
+        value_line("status", pull_request.status_label()),
+        value_line("draft", if pull_request.is_draft { "yes" } else { "no" }),
+        value_line("title", &pull_request.title),
+        value_line("author", pull_request.author_login()),
+        value_line("branch", &pull_request.head_ref_name),
+        value_line("base", &pull_request.base_ref_name),
+        value_line("number", &format!("#{}", pull_request.number)),
+        value_line("created", &pull_request.created_at.to_rfc3339()),
+        value_line("updated", &pull_request.updated_at.to_rfc3339()),
+        value_line("age", &timefmt::age(pull_request.created_at)),
+    ]
+}
+
+fn value_line(label: &str, value: &str) -> Line<'static> {
+    Line::from(vec![
+        Span::styled(
+            format!("{label:<12}"),
+            Style::default()
+                .fg(Color::Yellow)
+                .add_modifier(Modifier::BOLD),
+        ),
+        Span::styled(value.to_string(), Style::default().fg(Color::White)),
+    ])
 }
 
 fn config_lines(state: &State) -> Vec<Line<'static>> {
@@ -418,10 +568,9 @@ fn config_value(row: ConfigRow, state: &State) -> String {
 
 fn panel_footer(panel: Panel) -> Line<'static> {
     let text = match panel.kind {
-        crate::panel::PanelKind::Config => {
-            "↑/↓ selects  ←/→ or -/+ edit  q/ESC cancel  ENTER accept"
-        }
-        crate::panel::PanelKind::Keys => "q / ESC closes this panel",
+        PanelKind::Config => "↑/↓ selects  ←/→ or -/+ edit  q/ESC cancel  ↵ accept",
+        PanelKind::Keys => "q / ESC closes this panel",
+        PanelKind::QuickLook => "↑/↓ scroll  ␣ / q / ESC closes this panel",
     };
     Line::from(Span::styled(text, Style::default().fg(Color::DarkGray)))
 }

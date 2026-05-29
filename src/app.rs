@@ -45,6 +45,8 @@ pub struct State {
     pub pull_requests: Vec<PullRequest>,
     pub selected_run: usize,
     pub selected_pr: usize,
+    pub runs_scroll: usize,
+    pub prs_scroll: usize,
     pub cursor_visible: bool,
     pub last_check: Option<DateTime<Local>>,
     pub loading: bool,
@@ -54,6 +56,7 @@ pub struct State {
     pub config_draft: Option<ConfigDraft>,
     pub config_focus: usize,
     pub config_text_cursor: usize,
+    pub quick_look_scroll: usize,
     pub settings: Settings,
 }
 
@@ -108,6 +111,8 @@ fn run_loop(
         pull_requests: Vec::new(),
         selected_run: 0,
         selected_pr: 0,
+        runs_scroll: 0,
+        prs_scroll: 0,
         cursor_visible: false,
         last_check: None,
         loading: false,
@@ -117,6 +122,7 @@ fn run_loop(
         config_draft: None,
         config_focus: 0,
         config_text_cursor: 0,
+        quick_look_scroll: 0,
         settings,
     };
 
@@ -172,7 +178,7 @@ fn run_loop(
             }
         }
 
-        terminal.draw(|frame| ui::draw(frame, &state))?;
+        terminal.draw(|frame| ui::draw(frame, &mut state))?;
 
         if event::poll(Duration::from_millis(100))? {
             if let Event::Key(key) = event::read()? {
@@ -202,6 +208,11 @@ fn handle_key(
         KeyCode::Char('q') | KeyCode::Esc => true,
         KeyCode::Char('k') => {
             state.panel = Some(Panel::keys());
+            false
+        }
+        KeyCode::Char(' ') => {
+            state.quick_look_scroll = 0;
+            state.panel = Some(Panel::quick_look());
             false
         }
         KeyCode::Char('c') => {
@@ -289,8 +300,27 @@ fn handle_panel_key(
                 handle_config_key(key, state, next_refresh);
                 false
             }
+            Some(PanelKind::QuickLook) => {
+                handle_quick_look_key(key, state);
+                false
+            }
             Some(PanelKind::Keys) | None => false,
         },
+    }
+}
+
+fn handle_quick_look_key(key: KeyEvent, state: &mut State) {
+    match key.code {
+        KeyCode::Char(' ') => {
+            state.panel = None;
+        }
+        KeyCode::Up => {
+            state.quick_look_scroll = state.quick_look_scroll.saturating_sub(1);
+        }
+        KeyCode::Down => {
+            state.quick_look_scroll = state.quick_look_scroll.saturating_add(1);
+        }
+        _ => {}
     }
 }
 
@@ -516,15 +546,22 @@ fn spawn_fetch(repo: String, settings: Settings) -> Receiver<FetchResult> {
 fn clamp_selection(state: &mut State) {
     if state.runs.is_empty() {
         state.selected_run = 0;
+        state.runs_scroll = 0;
     } else if state.selected_run >= state.runs.len() {
         state.selected_run = state.runs.len() - 1;
     }
 
     if state.pull_requests.is_empty() {
         state.selected_pr = 0;
+        state.prs_scroll = 0;
     } else if state.selected_pr >= state.pull_requests.len() {
         state.selected_pr = state.pull_requests.len() - 1;
     }
+
+    state.runs_scroll = state.runs_scroll.min(state.runs.len().saturating_sub(1));
+    state.prs_scroll = state
+        .prs_scroll
+        .min(state.pull_requests.len().saturating_sub(1));
 }
 
 fn selected_mut(state: &mut State) -> &mut usize {
