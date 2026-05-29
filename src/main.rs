@@ -1,4 +1,5 @@
 mod app;
+mod cache;
 mod cli;
 mod columns;
 mod config;

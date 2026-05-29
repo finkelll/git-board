@@ -39,7 +39,13 @@ git-board --pr-columns status,title,author,branch,base,number,age,updated
 git-board --branch main --workflow verify --status in_progress
 git-board --no-cursor-auto-hide
 git-board --cursor-hide-after 10s
+git-board --global
 ```
+
+`--global` shares a temporary cache between `git-board` clients opened on the
+same repository. The first client owns refreshes and writes the cache; other
+clients read it. The cache is removed when the last client for that repository
+exits.
 
 Keys:
 

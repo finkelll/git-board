@@ -64,6 +64,13 @@ pub struct Cli {
         help = "Time until the navigation cursor hides, for example 5s"
     )]
     pub cursor_hide_after: Option<String>,
+
+    #[arg(
+        long = "global",
+        action = ArgAction::SetTrue,
+        help = "Share a temp cache between git-board clients for the same repo"
+    )]
+    pub global: bool,
 }
 
 impl Cli {

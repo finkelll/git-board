@@ -25,6 +25,7 @@ pub struct Settings {
     pub pr_columns: Vec<PrColumn>,
     pub filters: Filters,
     pub cursor: CursorSettings,
+    pub global: bool,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -115,6 +116,7 @@ impl Settings {
                 event: non_empty(args.event).or_else(|| non_empty(file_filters.event)),
             },
             cursor,
+            global: args.global,
         })
     }
 }

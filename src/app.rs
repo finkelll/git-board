@@ -1,3 +1,4 @@
+use crate::cache::{GlobalCacheSession, GlobalCacheWorker};
 use crate::columns::{parse_columns_csv, parse_pr_columns_csv};
 use crate::config::{CursorSettings, Settings};
 use crate::gh::{self, SystemRunner};
@@ -13,6 +14,7 @@ use crossterm::terminal::{
 };
 use ratatui::backend::CrosstermBackend;
 use ratatui::Terminal;
+use serde::{Deserialize, Serialize};
 use std::io;
 use std::sync::mpsc::{self, Receiver};
 use std::thread;
@@ -21,6 +23,11 @@ use std::time::{Duration, Instant};
 pub fn run(settings: Settings) -> Result<()> {
     let runner = SystemRunner;
     let repo = gh::resolve_repo(&settings, &runner)?;
+    let global_cache = if settings.global {
+        Some(GlobalCacheSession::register(&repo)?)
+    } else {
+        None
+    };
 
     enable_raw_mode()?;
     let mut stdout = io::stdout();
@@ -28,7 +35,7 @@ pub fn run(settings: Settings) -> Result<()> {
     let backend = CrosstermBackend::new(stdout);
     let mut terminal = Terminal::new(backend)?;
 
-    let result = run_loop(&mut terminal, repo, settings);
+    let result = run_loop(&mut terminal, repo, settings, global_cache);
 
     disable_raw_mode()?;
     execute!(terminal.backend_mut(), LeaveAlternateScreen)?;
@@ -103,6 +110,7 @@ fn run_loop(
     terminal: &mut Terminal<CrosstermBackend<io::Stdout>>,
     repo: String,
     settings: Settings,
+    mut global_cache: Option<GlobalCacheSession>,
 ) -> Result<()> {
     let mut state = State {
         repo,
@@ -145,8 +153,18 @@ fn run_loop(
             }
         }
 
+        if let Some(cache) = &mut global_cache {
+            if let Err(error) = cache.maintain() {
+                state.error = Some(error.to_string());
+            }
+        }
+
         if pending.is_none() && Instant::now() >= next_refresh {
-            pending = Some(spawn_fetch(state.repo.clone(), state.settings.clone()));
+            pending = Some(spawn_fetch(
+                state.repo.clone(),
+                state.settings.clone(),
+                global_cache.as_ref().map(GlobalCacheSession::worker),
+            ));
             state.loading = true;
         }
 
@@ -519,7 +537,7 @@ fn adjust_usize(value: usize, direction: i32, min: usize, max: usize) -> usize {
     next.clamp(min, max)
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 struct DashboardData {
     runs: Vec<Run>,
     pull_requests: Vec<PullRequest>,
@@ -527,20 +545,44 @@ struct DashboardData {
 
 type FetchResult = anyhow::Result<DashboardData>;
 
-fn spawn_fetch(repo: String, settings: Settings) -> Receiver<FetchResult> {
+fn spawn_fetch(
+    repo: String,
+    settings: Settings,
+    global_cache: Option<GlobalCacheWorker>,
+) -> Receiver<FetchResult> {
     let (tx, rx) = mpsc::channel();
     thread::spawn(move || {
-        let result = gh::fetch_runs(&repo, &settings, &SystemRunner).and_then(|runs| {
-            gh::fetch_pull_requests(&repo, &settings, &SystemRunner).map(|pull_requests| {
-                DashboardData {
-                    runs,
-                    pull_requests,
-                }
-            })
-        });
+        let result = fetch_dashboard(&repo, &settings, global_cache);
         let _ = tx.send(result);
     });
     rx
+}
+
+fn fetch_dashboard(
+    repo: &str,
+    settings: &Settings,
+    global_cache: Option<GlobalCacheWorker>,
+) -> FetchResult {
+    let Some(cache) = global_cache else {
+        return fetch_dashboard_from_github(repo, settings);
+    };
+
+    if !cache.is_owner() {
+        return cache.read();
+    }
+
+    let data = fetch_dashboard_from_github(repo, settings)?;
+    cache.write(&data)?;
+    Ok(data)
+}
+
+fn fetch_dashboard_from_github(repo: &str, settings: &Settings) -> FetchResult {
+    gh::fetch_runs(repo, settings, &SystemRunner).and_then(|runs| {
+        gh::fetch_pull_requests(repo, settings, &SystemRunner).map(|pull_requests| DashboardData {
+            runs,
+            pull_requests,
+        })
+    })
 }
 
 fn clamp_selection(state: &mut State) {

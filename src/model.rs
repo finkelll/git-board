@@ -1,7 +1,7 @@
 use chrono::{DateTime, Utc};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Run {
     pub conclusion: Option<String>,
@@ -17,7 +17,7 @@ pub struct Run {
     pub workflow_name: String,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PullRequest {
     pub author: Option<PullRequestAuthor>,
@@ -30,7 +30,7 @@ pub struct PullRequest {
     pub updated_at: DateTime<Utc>,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct PullRequestAuthor {
     pub login: String,
 }
