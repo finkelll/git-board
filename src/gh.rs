@@ -2,6 +2,7 @@ use crate::config::{Filters, Settings};
 use crate::model::{PullRequest, Run};
 use anyhow::{bail, Context, Result};
 use serde::Deserialize;
+use std::collections::HashMap;
 use std::process::Command;
 
 const JSON_FIELDS: &str = concat!(
@@ -10,6 +11,7 @@ const JSON_FIELDS: &str = concat!(
 );
 const PR_JSON_FIELDS: &str =
     "author,baseRefName,createdAt,headRefName,isDraft,number,title,updatedAt";
+const RUN_PR_JSON_FIELDS: &str = "headRefName,number";
 
 pub trait CommandRunner {
     fn run(&self, program: &str, args: &[String]) -> Result<String>;
@@ -166,32 +168,45 @@ fn populate_run_pr_numbers(
     runs: &mut [Run],
     runner: &impl CommandRunner,
 ) -> Result<()> {
+    if !runs.iter().any(Run::is_pull_request_event) {
+        return Ok(());
+    }
+
+    let args = run_pr_list_args(repo, runs.len());
+    let output = runner.run("gh", &args)?;
+    let pull_requests = parse_run_pull_requests(&output)?;
+    let mut pull_request_by_branch = HashMap::new();
+    for pull_request in pull_requests {
+        pull_request_by_branch
+            .entry(pull_request.head_ref_name)
+            .or_insert(pull_request.number);
+    }
+
     for run in runs
         .iter_mut()
         .filter(|run| run.is_pull_request_event() && run.pr_number.is_none())
     {
-        run.pr_number = fetch_run_pr_number(repo, run.database_id, runner)
-            .with_context(|| format!("failed to fetch PR for workflow run {}", run.database_id))?;
+        run.pr_number = pull_request_by_branch.get(&run.head_branch).copied();
     }
 
     Ok(())
 }
 
-fn fetch_run_pr_number(
-    repo: &str,
-    database_id: u64,
-    runner: &impl CommandRunner,
-) -> Result<Option<u64>> {
-    let args = vec![
-        "api".to_string(),
-        format!("repos/{repo}/actions/runs/{database_id}/pull_requests"),
-    ];
-    let output = runner.run("gh", &args)?;
-    let pull_requests = parse_run_pull_requests(&output)?;
-
-    Ok(pull_requests
-        .first()
-        .map(|pull_request| pull_request.number))
+fn run_pr_list_args(repo: &str, run_count: usize) -> Vec<String> {
+    vec![
+        "pr".to_string(),
+        "list".to_string(),
+        "--repo".to_string(),
+        repo.to_string(),
+        "--state".to_string(),
+        "all".to_string(),
+        "--search".to_string(),
+        "sort:updated-desc".to_string(),
+        "--limit".to_string(),
+        run_count.max(100).to_string(),
+        "--json".to_string(),
+        RUN_PR_JSON_FIELDS.to_string(),
+    ]
 }
 
 fn parse_runs(output: &str) -> Result<Vec<Run>> {
@@ -207,7 +222,9 @@ fn parse_pull_requests(output: &str) -> Result<Vec<PullRequest>> {
 }
 
 #[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
 struct RunPullRequest {
+    head_ref_name: String,
     number: u64,
 }
 
@@ -287,8 +304,10 @@ mod tests {
 
     #[test]
     fn parses_run_pull_requests() {
-        let pull_requests = parse_run_pull_requests(r#"[{"number":330}]"#).unwrap();
+        let pull_requests =
+            parse_run_pull_requests(r#"[{"headRefName":"feature","number":330}]"#).unwrap();
 
+        assert_eq!(pull_requests[0].head_ref_name, "feature");
         assert_eq!(pull_requests[0].number, 330);
     }
 
@@ -311,7 +330,7 @@ mod tests {
                 "workflowDatabaseId":456,
                 "workflowName":"verify"
             }]"#,
-            r#"[{"number":330}]"#,
+            r#"[{"headRefName":"feature","number":330}]"#,
         ]);
         let settings = Settings {
             repo: None,
@@ -330,9 +349,12 @@ mod tests {
         let runs = fetch_runs("owner/repo", &settings, &runner).unwrap();
 
         assert_eq!(runs[0].pr_number, Some(330));
-        assert!(runner.calls.borrow()[1]
+        let calls = runner.calls.borrow();
+        assert!(calls[1].windows(2).any(|pair| pair == ["pr", "list"]));
+        assert!(calls[1].windows(2).any(|pair| pair == ["--state", "all"]));
+        assert!(calls[1]
             .windows(2)
-            .any(|pair| { pair == ["api", "repos/owner/repo/actions/runs/123/pull_requests"] }));
+            .any(|pair| pair == ["--json", RUN_PR_JSON_FIELDS]));
     }
 
     #[test]
