@@ -225,6 +225,12 @@ fn run_cell_for(column: Column, run: &Run) -> Cell<'static> {
         Column::Event => {
             Cell::from(truncate_owned(&run.event, 16)).style(Style::default().fg(Color::White))
         }
+        Column::PullRequest => Cell::from(
+            run.pr_number
+                .map(|number| format!("#{number}"))
+                .unwrap_or_default(),
+        )
+        .style(Style::default().fg(Color::Cyan)),
         Column::Id => {
             Cell::from(run.database_id.to_string()).style(Style::default().fg(Color::Cyan))
         }
@@ -420,6 +426,12 @@ fn run_detail_lines(run: &Run) -> Vec<Line<'static>> {
         value_line("workflow", run.workflow_label()),
         value_line("branch", &run.head_branch),
         value_line("event", &run.event),
+        value_line(
+            "pr",
+            &run.pr_number
+                .map(|number| format!("#{number}"))
+                .unwrap_or_default(),
+        ),
         value_line("id", &run.database_id.to_string()),
         value_line("created", &run.created_at.to_rfc3339()),
         value_line(

@@ -34,7 +34,7 @@ Useful options:
 
 ```sh
 git-board --repo owner/name --interval 10s --limit 30
-git-board --columns status,title,workflow,branch,event,id,elapsed,age
+git-board --columns status,title,workflow,branch,event,pr,id,elapsed,age
 git-board --pr-columns status,title,author,branch,base,number,age,updated
 git-board --branch main --workflow verify --status in_progress
 git-board --no-cursor-auto-hide
@@ -76,7 +76,7 @@ config values.
 repo = "owner/name"
 interval = "15s"
 limit = 20
-columns = ["status", "title", "workflow", "branch", "event", "id", "elapsed", "age"]
+columns = ["status", "title", "workflow", "branch", "event", "pr", "id", "elapsed", "age"]
 pr_columns = ["status", "title", "author", "branch", "base", "number", "age", "updated"]
 
 [cursor]

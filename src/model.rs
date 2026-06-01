@@ -11,6 +11,7 @@ pub struct Run {
     pub event: String,
     pub head_branch: String,
     pub name: String,
+    pub pr_number: Option<u64>,
     pub started_at: Option<DateTime<Utc>>,
     pub status: String,
     pub updated_at: DateTime<Utc>,
@@ -59,6 +60,10 @@ impl Run {
         } else {
             &self.workflow_name
         }
+    }
+
+    pub fn is_pull_request_event(&self) -> bool {
+        self.event.starts_with("pull_request")
     }
 
     pub fn status_label(&self) -> &str {

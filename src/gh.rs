@@ -78,7 +78,9 @@ pub fn fetch_runs(
 ) -> Result<Vec<Run>> {
     let args = run_list_args(repo, settings.limit, &settings.filters);
     let output = runner.run("gh", &args)?;
-    parse_runs(&output)
+    let mut runs = parse_runs(&output)?;
+    populate_run_pr_numbers(repo, &mut runs, runner)?;
+    Ok(runs)
 }
 
 pub fn fetch_pull_requests(
@@ -159,18 +161,85 @@ fn push_filter(args: &mut Vec<String>, flag: &str, value: &Option<String>) {
     }
 }
 
+fn populate_run_pr_numbers(
+    repo: &str,
+    runs: &mut [Run],
+    runner: &impl CommandRunner,
+) -> Result<()> {
+    for run in runs
+        .iter_mut()
+        .filter(|run| run.is_pull_request_event() && run.pr_number.is_none())
+    {
+        run.pr_number = fetch_run_pr_number(repo, run.database_id, runner)
+            .with_context(|| format!("failed to fetch PR for workflow run {}", run.database_id))?;
+    }
+
+    Ok(())
+}
+
+fn fetch_run_pr_number(
+    repo: &str,
+    database_id: u64,
+    runner: &impl CommandRunner,
+) -> Result<Option<u64>> {
+    let args = vec![
+        "api".to_string(),
+        format!("repos/{repo}/actions/runs/{database_id}/pull_requests"),
+    ];
+    let output = runner.run("gh", &args)?;
+    let pull_requests = parse_run_pull_requests(&output)?;
+
+    Ok(pull_requests
+        .first()
+        .map(|pull_request| pull_request.number))
+}
+
 fn parse_runs(output: &str) -> Result<Vec<Run>> {
     serde_json::from_str(output).context("failed to parse gh run list JSON")
+}
+
+fn parse_run_pull_requests(output: &str) -> Result<Vec<RunPullRequest>> {
+    serde_json::from_str(output).context("failed to parse gh workflow run pull requests JSON")
 }
 
 fn parse_pull_requests(output: &str) -> Result<Vec<PullRequest>> {
     serde_json::from_str(output).context("failed to parse gh pr list JSON")
 }
 
+#[derive(Debug, Deserialize)]
+struct RunPullRequest {
+    number: u64,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::config::Filters;
+    use std::cell::RefCell;
+
+    struct FakeRunner {
+        calls: RefCell<Vec<Vec<String>>>,
+        outputs: RefCell<Vec<String>>,
+    }
+
+    impl FakeRunner {
+        fn new(outputs: Vec<&str>) -> Self {
+            Self {
+                calls: RefCell::new(Vec::new()),
+                outputs: RefCell::new(outputs.into_iter().rev().map(ToString::to_string).collect()),
+            }
+        }
+    }
+
+    impl CommandRunner for FakeRunner {
+        fn run(&self, _program: &str, args: &[String]) -> Result<String> {
+            self.calls.borrow_mut().push(args.to_vec());
+            self.outputs
+                .borrow_mut()
+                .pop()
+                .context("fake runner had no output")
+        }
+    }
 
     #[test]
     fn builds_run_list_args_with_filters() {
@@ -214,6 +283,56 @@ mod tests {
         let runs = parse_runs(json).unwrap();
         assert_eq!(runs[0].database_id, 123);
         assert_eq!(runs[0].workflow_label(), "verify");
+    }
+
+    #[test]
+    fn parses_run_pull_requests() {
+        let pull_requests = parse_run_pull_requests(r#"[{"number":330}]"#).unwrap();
+
+        assert_eq!(pull_requests[0].number, 330);
+    }
+
+    #[test]
+    fn fetch_runs_populates_pr_numbers_for_pr_events() {
+        let runner = FakeRunner::new(vec![
+            r#"[{
+                "conclusion":null,
+                "createdAt":"2026-05-29T14:00:00Z",
+                "databaseId":123,
+                "displayTitle":"feat: dashboard",
+                "event":"pull_request",
+                "headBranch":"feature",
+                "headSha":"abc",
+                "name":"verify",
+                "number":1,
+                "startedAt":"2026-05-29T14:00:03Z",
+                "status":"in_progress",
+                "updatedAt":"2026-05-29T14:01:03Z",
+                "workflowDatabaseId":456,
+                "workflowName":"verify"
+            }]"#,
+            r#"[{"number":330}]"#,
+        ]);
+        let settings = Settings {
+            repo: None,
+            interval: std::time::Duration::from_secs(15),
+            limit: 20,
+            columns: Vec::new(),
+            pr_columns: Vec::new(),
+            filters: Filters::default(),
+            cursor: crate::config::CursorSettings {
+                auto_hide: true,
+                hide_after: std::time::Duration::from_secs(5),
+            },
+            global: false,
+        };
+
+        let runs = fetch_runs("owner/repo", &settings, &runner).unwrap();
+
+        assert_eq!(runs[0].pr_number, Some(330));
+        assert!(runner.calls.borrow()[1]
+            .windows(2)
+            .any(|pair| { pair == ["api", "repos/owner/repo/actions/runs/123/pull_requests"] }));
     }
 
     #[test]

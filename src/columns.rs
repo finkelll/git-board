@@ -9,6 +9,7 @@ pub enum Column {
     Workflow,
     Branch,
     Event,
+    PullRequest,
     Id,
     Elapsed,
     Age,
@@ -34,6 +35,7 @@ impl Column {
             Self::Workflow,
             Self::Branch,
             Self::Event,
+            Self::PullRequest,
             Self::Id,
             Self::Elapsed,
             Self::Age,
@@ -47,6 +49,7 @@ impl Column {
             Self::Workflow => "WORKFLOW",
             Self::Branch => "BRANCH",
             Self::Event => "EVENT",
+            Self::PullRequest => "PR",
             Self::Id => "ID",
             Self::Elapsed => "ELAPSED",
             Self::Age => "AGE",
@@ -60,6 +63,7 @@ impl Column {
             Self::Workflow => 18,
             Self::Branch => 34,
             Self::Event => 16,
+            Self::PullRequest => 8,
             Self::Id => 14,
             Self::Elapsed => 10,
             Self::Age => 24,
@@ -67,7 +71,7 @@ impl Column {
     }
 
     pub fn all_names() -> &'static str {
-        "status,title,workflow,branch,event,id,elapsed,age"
+        "status,title,workflow,branch,event,pr,id,elapsed,age"
     }
 }
 
@@ -124,6 +128,7 @@ impl fmt::Display for Column {
             Self::Workflow => "workflow",
             Self::Branch => "branch",
             Self::Event => "event",
+            Self::PullRequest => "pr",
             Self::Id => "id",
             Self::Elapsed => "elapsed",
             Self::Age => "age",
@@ -142,6 +147,7 @@ impl FromStr for Column {
             "workflow" => Ok(Self::Workflow),
             "branch" => Ok(Self::Branch),
             "event" => Ok(Self::Event),
+            "pr" | "pull_request" | "pull-request" | "number" => Ok(Self::PullRequest),
             "id" => Ok(Self::Id),
             "elapsed" => Ok(Self::Elapsed),
             "age" => Ok(Self::Age),
@@ -249,8 +255,13 @@ mod tests {
     #[test]
     fn parses_columns_in_order() {
         assert_eq!(
-            parse_columns_csv("title,status,id").unwrap(),
-            vec![Column::Title, Column::Status, Column::Id]
+            parse_columns_csv("title,status,pr,id").unwrap(),
+            vec![
+                Column::Title,
+                Column::Status,
+                Column::PullRequest,
+                Column::Id
+            ]
         );
     }
 
