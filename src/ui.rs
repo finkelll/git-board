@@ -1,4 +1,4 @@
-use crate::app::{Screen, State};
+use crate::app::{selected_run, visible_run_indices, RunSort, Screen, State};
 use crate::columns::{Column, PrColumn};
 use crate::model::{PullRequest, Run};
 use crate::panel::{ConfigRow, Panel, PanelKind};
@@ -178,18 +178,22 @@ fn render_runs_table(frame: &mut Frame<'_>, state: &mut State, area: Rect) {
         .iter()
         .map(|column| Constraint::Length(column.width()))
         .collect::<Vec<_>>();
+    let visible = visible_run_indices(state);
     let header = table_header(state.settings.columns.iter().map(|column| column.header()));
-    let rows = state.runs.iter().enumerate().map(|(index, run)| {
+    let rows = visible.iter().enumerate().filter_map(|(index, run_index)| {
+        let run = state.runs.get(*run_index)?;
         let selected = state.cursor_visible && index == state.selected_run;
-        Row::new(
-            state
-                .settings
-                .columns
-                .iter()
-                .map(|column| run_cell_for(*column, run))
-                .collect::<Vec<_>>(),
+        Some(
+            Row::new(
+                state
+                    .settings
+                    .columns
+                    .iter()
+                    .map(|column| run_cell_for(*column, run))
+                    .collect::<Vec<_>>(),
+            )
+            .style(row_style(selected)),
         )
-        .style(row_style(selected))
     });
     render_table(
         frame,
@@ -379,15 +383,21 @@ fn footer(state: &State) -> Line<'static> {
             Style::default().fg(Color::White),
         ),
         Span::raw("  "),
+        Span::styled("layout ", Style::default().fg(Color::DarkGray)),
+        Span::styled(
+            state.settings.layout.to_string(),
+            Style::default().fg(Color::White),
+        ),
+        Span::raw("  "),
     ];
 
     spans.push(Span::styled(
         match state.screen {
             Screen::Runs => {
-                "⇥ PRs  r refresh  c config  k keys  ␣ quick look  ↑/↓ select  ↵ open run  q/ESC quit"
+                "⇥ PRs  l layout  r refresh  c config  k keys  ␣ quick look  ↑/↓ select  ↵ open run  q/ESC quit"
             }
             Screen::PullRequests => {
-                "⇥ Actions  r refresh  c config  k keys  ␣ quick look  ↑/↓ select  ↵ open PR  q/ESC quit"
+                "⇥ Actions  l layout  r refresh  c config  k keys  ␣ quick look  ↑/↓ select  ↵ open PR  q/ESC quit"
             }
         },
         Style::default().fg(Color::DarkGray),
@@ -429,15 +439,6 @@ fn render_panel(frame: &mut Frame<'_>, panel: Panel, state: &mut State) {
         .borders(Borders::ALL)
         .border_style(Style::default().fg(Color::Cyan));
 
-    if panel.kind != PanelKind::QuickLook {
-        let paragraph = Paragraph::new(lines)
-            .block(block)
-            .style(Style::default().bg(Color::Black))
-            .wrap(Wrap { trim: true });
-        frame.render_widget(paragraph, area);
-        return;
-    }
-
     let inner = block.inner(area);
     frame.render_widget(block.style(Style::default().bg(Color::Black)), area);
     let chunks = Layout::default()
@@ -446,10 +447,21 @@ fn render_panel(frame: &mut Frame<'_>, panel: Panel, state: &mut State) {
         .split(inner);
     let visible_lines = usize::from(chunks[0].height);
     let max_scroll = lines.len().saturating_sub(visible_lines);
-    state.quick_look_scroll = state.quick_look_scroll.min(max_scroll);
+    let scroll = match panel.kind {
+        PanelKind::Config => config_panel_scroll(state, visible_lines, max_scroll),
+        PanelKind::QuickLook => {
+            state.quick_look_scroll = state.quick_look_scroll.min(max_scroll);
+            state.quick_look_scroll
+        }
+        PanelKind::Keys => {
+            state.keys_scroll = state.keys_scroll.min(max_scroll);
+            state.keys_scroll
+        }
+        PanelKind::AuthLogin | PanelKind::Destroy | PanelKind::DestroyMassiveConfirm => 0,
+    };
     let body = Paragraph::new(lines)
         .style(Style::default().bg(Color::Black))
-        .scroll((state.quick_look_scroll as u16, 0))
+        .scroll((scroll as u16, 0))
         .wrap(Wrap { trim: true });
     frame.render_widget(body, chunks[0]);
     frame.render_widget(
@@ -458,7 +470,21 @@ fn render_panel(frame: &mut Frame<'_>, panel: Panel, state: &mut State) {
     );
 }
 
+fn config_panel_scroll(state: &State, visible_lines: usize, max_scroll: usize) -> usize {
+    if visible_lines == 0 {
+        return 0;
+    }
+
+    let focus = state.config_focus;
+    let scroll = focus.saturating_add(1).saturating_sub(visible_lines);
+    scroll.min(max_scroll)
+}
+
 fn panel_lines(panel: Panel, state: &State) -> Vec<Line<'static>> {
+    if panel.kind == PanelKind::Keys {
+        return keys_lines(state);
+    }
+
     let mut lines = panel
         .lines()
         .iter()
@@ -470,15 +496,29 @@ fn panel_lines(panel: Panel, state: &State) -> Vec<Line<'static>> {
             PanelKind::Config => config_lines(state),
             PanelKind::QuickLook => quick_look_lines(state),
             PanelKind::AuthLogin => auth_login_lines(state),
-            PanelKind::Keys => Vec::new(),
+            PanelKind::Destroy => destroy_lines(state),
+            PanelKind::DestroyMassiveConfirm => destroy_massive_confirm_lines(state),
+            PanelKind::Keys => keys_lines(state),
         };
     }
 
-    if panel.kind != PanelKind::QuickLook {
-        lines.push(Line::from(""));
-        lines.push(panel_footer(panel));
-    }
     lines
+}
+
+fn keys_lines(state: &State) -> Vec<Line<'static>> {
+    let mut lines = Panel::keys()
+        .lines()
+        .iter()
+        .map(|(key, command)| command_line(key, command))
+        .collect::<Vec<_>>();
+
+    lines.push(Line::from(""));
+    lines.push(value_line("sort", sort_description(state.run_sort)));
+    lines
+}
+
+fn sort_description(sort: RunSort) -> &'static str {
+    sort.label()
 }
 
 fn auth_login_lines(state: &State) -> Vec<Line<'static>> {
@@ -494,7 +534,65 @@ fn auth_login_lines(state: &State) -> Vec<Line<'static>> {
     ]
 }
 
+fn destroy_lines(state: &State) -> Vec<Line<'static>> {
+    vec![
+        attention_line(),
+        Line::from("Close git-board sessions?"),
+        Line::from(""),
+        Line::from(vec![
+            prompt_choice_span("YES", state.destroy_prompt_focus == 0),
+            Span::raw("  "),
+            prompt_choice_span("NO", state.destroy_prompt_focus == 1),
+            Span::raw("  "),
+            prompt_choice_span("MASSIVE", state.destroy_prompt_focus == 2),
+        ]),
+        Line::from(""),
+        Line::from(destroy_option_description(state.destroy_prompt_focus)),
+    ]
+}
+
+fn destroy_massive_confirm_lines(state: &State) -> Vec<Line<'static>> {
+    vec![
+        attention_line(),
+        Line::from("Destroy all git-board sessions?"),
+        Line::from(""),
+        Line::from(vec![
+            prompt_choice_span("YES", state.destroy_massive_focus == 0),
+            Span::raw("  "),
+            prompt_choice_span("NO", state.destroy_massive_focus == 1),
+        ]),
+        Line::from(""),
+        Line::from(destroy_massive_description(state.destroy_massive_focus)),
+    ]
+}
+
+fn attention_line() -> Line<'static> {
+    Line::from(Span::styled(
+        "ATTENTION",
+        Style::default().fg(Color::Red).add_modifier(Modifier::BOLD),
+    ))
+}
+
+fn destroy_option_description(focus: usize) -> &'static str {
+    match focus {
+        0 => "Close every git-board client for this repository, including this one.",
+        1 => "Do nothing and close this panel.",
+        _ => "Open an additional confirmation before closing every git-board client.",
+    }
+}
+
+fn destroy_massive_description(focus: usize) -> &'static str {
+    match focus {
+        0 => "Close every registered git-board client across all repositories.",
+        _ => "Do nothing and close this panel.",
+    }
+}
+
 fn auth_choice_span(label: &str, focused: bool) -> Span<'static> {
+    prompt_choice_span(label, focused)
+}
+
+fn prompt_choice_span(label: &str, focused: bool) -> Span<'static> {
     let style = if focused {
         Style::default()
             .fg(Color::Black)
@@ -511,7 +609,7 @@ fn auth_choice_span(label: &str, focused: bool) -> Span<'static> {
 
 fn quick_look_lines(state: &State) -> Vec<Line<'static>> {
     match state.screen {
-        Screen::Runs => state.runs.get(state.selected_run).map_or_else(
+        Screen::Runs => selected_run(state).map_or_else(
             || vec![value_line("status", "No run selected")],
             run_detail_lines,
         ),
@@ -632,6 +730,9 @@ fn config_row_line(row: ConfigRow, focused: bool, state: &State) -> Line<'static
 fn config_value(row: ConfigRow, state: &State) -> String {
     let draft = state.config_draft.as_ref();
     match row {
+        ConfigRow::Layout => draft
+            .map_or(state.settings.layout, |draft| draft.layout)
+            .to_string(),
         ConfigRow::Interval => humantime::format_duration(
             draft.map_or(state.settings.interval, |draft| draft.interval),
         )
@@ -685,9 +786,15 @@ fn config_value(row: ConfigRow, state: &State) -> String {
 fn panel_footer(panel: Panel) -> Line<'static> {
     let text = match panel.kind {
         PanelKind::Config => "↑/↓ selects  ←/→ or -/+ edit  q/ESC cancel  ↵ accept",
-        PanelKind::Keys => "q / ESC closes this panel",
+        PanelKind::Keys => "↑/↓ scroll  q / ESC closes this panel",
         PanelKind::QuickLook => "↑/↓ scroll  ␣ / q / ESC closes this panel",
         PanelKind::AuthLogin => "←/→ choose  ↵ confirm  Y yes  N no  ESC closes this panel",
+        PanelKind::Destroy => {
+            "←/→ choose  ↵ confirm  Y yes  N no  M massive  ESC closes this panel"
+        }
+        PanelKind::DestroyMassiveConfirm => {
+            "←/→ choose  ↵ confirm  Y yes  N no  ESC closes this panel"
+        }
     };
     Line::from(Span::styled(text, Style::default().fg(Color::DarkGray)))
 }

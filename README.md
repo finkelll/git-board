@@ -36,6 +36,7 @@ Useful options:
 
 ```sh
 git-board --repo owner/name --interval 10s --limit 30
+git-board --layout all
 git-board --columns status,title,workflow,branch,event,pr,id,elapsed,age
 git-board --pr-columns status,title,author,branch,base,number,age,updated
 git-board --branch main --workflow verify --status in_progress
@@ -55,9 +56,25 @@ interval. The cache is removed when the last client for that repository exits.
 Use `--independent` to run a process with its own refresh loop instead of the
 shared cache.
 
+Run layouts:
+
+- `in-progress`: default startup layout. Shows in-progress runs, unresolved
+  failures, and the latest successful run for each workflow that has no newer
+  run.
+- `all`: shows all runs.
+
+An unresolved failure is a failed run whose same workflow and branch has no newer
+started run and no newer successful run.
+
+The default run sort is newest first, with successful runs placed after active
+and failed runs in the `in-progress` layout. Press `s` to cycle between that
+sort and plain newest-first ordering.
+
 Keys:
 
 - `r`: refresh immediately
+- `l`: cycle run layout
+- `s`: cycle run sort
 - `⇥`: switch between GitHub Actions and open pull request screens
 - `h`: toggle cursor auto-hide
 - `c`: show focused config panel
@@ -92,6 +109,7 @@ config values.
 repo = "owner/name"
 interval = "15s"
 limit = 20
+layout = "in-progress"
 columns = ["status", "title", "workflow", "branch", "event", "pr", "id", "elapsed", "age"]
 pr_columns = ["status", "title", "author", "branch", "base", "number", "age", "updated"]
 

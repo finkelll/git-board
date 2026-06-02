@@ -18,6 +18,13 @@ pub struct Cli {
     pub limit: Option<usize>,
 
     #[arg(
+        long = "layout",
+        value_name = "LAYOUT",
+        help = "Startup layout: in-progress or all"
+    )]
+    pub layout: Option<String>,
+
+    #[arg(
         long = "columns",
         value_name = "LIST",
         help = "Comma-separated columns"

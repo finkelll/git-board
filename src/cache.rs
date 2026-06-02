@@ -141,6 +141,49 @@ impl GlobalCacheWorker {
     }
 }
 
+pub fn repo_client_pids(repo: &str) -> Result<Vec<u32>> {
+    let repo_dir = cache_root().join(repo_key(repo));
+    client_pids_in_repo_dir(&repo_dir)
+}
+
+pub fn all_client_pids() -> Result<Vec<u32>> {
+    let Ok(entries) = fs::read_dir(cache_root()) else {
+        return Ok(Vec::new());
+    };
+
+    let mut pids = Vec::new();
+    for entry in entries {
+        let entry = entry?;
+        if entry.file_type()?.is_dir() {
+            pids.extend(client_pids_in_repo_dir(&entry.path())?);
+        }
+    }
+
+    pids.sort_unstable();
+    pids.dedup();
+    Ok(pids)
+}
+
+fn client_pids_in_repo_dir(repo_dir: &PathBuf) -> Result<Vec<u32>> {
+    let clients_dir = repo_dir.join("clients");
+    remove_stale_clients(&clients_dir)?;
+    let Ok(entries) = fs::read_dir(&clients_dir) else {
+        return Ok(Vec::new());
+    };
+
+    let mut pids = Vec::new();
+    for entry in entries {
+        let entry = entry?;
+        if let Some(pid) = client_pid_from_key(&entry.file_name().to_string_lossy()) {
+            pids.push(pid);
+        }
+    }
+
+    pids.sort_unstable();
+    pids.dedup();
+    Ok(pids)
+}
+
 fn cache_root() -> PathBuf {
     std::env::temp_dir().join("git-board-global-cache")
 }
@@ -154,6 +197,11 @@ fn repo_key(repo: &str) -> String {
 
 fn client_key() -> String {
     format!("{}-{}", std::process::id(), unique_suffix())
+}
+
+fn client_pid_from_key(key: &str) -> Option<u32> {
+    key.split_once('-')
+        .and_then(|(pid, _)| pid.parse::<u32>().ok())
 }
 
 fn unique_suffix() -> u128 {
@@ -239,4 +287,16 @@ fn is_empty_dir(path: &PathBuf) -> Result<bool> {
 
 fn write_file(path: &PathBuf, value: &str) -> Result<()> {
     fs::write(path, value).with_context(|| format!("failed to write {}", path.display()))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parses_client_pid_from_key() {
+        assert_eq!(client_pid_from_key("123-456"), Some(123));
+        assert_eq!(client_pid_from_key("bad-456"), None);
+        assert_eq!(client_pid_from_key("123"), None);
+    }
 }

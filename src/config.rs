@@ -6,8 +6,10 @@ use crate::columns::{
 use anyhow::{bail, Context, Result};
 use serde::Deserialize;
 use std::env;
+use std::fmt;
 use std::fs;
 use std::path::PathBuf;
+use std::str::FromStr;
 use std::time::Duration;
 
 const DEFAULT_INTERVAL: Duration = Duration::from_secs(15);
@@ -26,6 +28,7 @@ pub struct Settings {
     pub filters: Filters,
     pub cursor: CursorSettings,
     pub global: bool,
+    pub layout: DashboardLayout,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -42,11 +45,55 @@ pub struct CursorSettings {
     pub hide_after: Duration,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DashboardLayout {
+    InProgress,
+    All,
+}
+
+impl DashboardLayout {
+    pub const VALUES: [Self; 2] = [Self::InProgress, Self::All];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::InProgress => "in progress",
+            Self::All => "all",
+        }
+    }
+
+    pub fn next(self) -> Self {
+        let index = Self::VALUES
+            .iter()
+            .position(|layout| *layout == self)
+            .unwrap_or(0);
+        Self::VALUES[(index + 1) % Self::VALUES.len()]
+    }
+}
+
+impl fmt::Display for DashboardLayout {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(self.label())
+    }
+}
+
+impl FromStr for DashboardLayout {
+    type Err = anyhow::Error;
+
+    fn from_str(value: &str) -> Result<Self> {
+        match value.trim().to_ascii_lowercase().replace('_', "-").as_str() {
+            "in-progress" | "in progress" | "progress" => Ok(Self::InProgress),
+            "all" => Ok(Self::All),
+            _ => bail!("layout must be one of: in-progress, all"),
+        }
+    }
+}
+
 #[derive(Debug, Default, Deserialize)]
 struct FileConfig {
     repo: Option<String>,
     interval: Option<String>,
     limit: Option<usize>,
+    layout: Option<String>,
     columns: Option<Vec<String>>,
     pr_columns: Option<Vec<String>>,
     filters: Option<FileFilters>,
@@ -117,6 +164,10 @@ impl Settings {
             },
             cursor,
             global: !args.independent,
+            layout: match args.layout.or(file.layout) {
+                Some(value) => value.parse()?,
+                None => DashboardLayout::InProgress,
+            },
         })
     }
 }
@@ -190,5 +241,18 @@ mod tests {
 
         assert_eq!(cursor.auto_hide, true);
         assert_eq!(cursor.hide_after, Duration::from_secs(5));
+    }
+
+    #[test]
+    fn parses_dashboard_layout() {
+        assert_eq!(
+            "in-progress".parse::<DashboardLayout>().unwrap(),
+            DashboardLayout::InProgress
+        );
+        assert_eq!(
+            "all".parse::<DashboardLayout>().unwrap(),
+            DashboardLayout::All
+        );
+        assert!("failures".parse::<DashboardLayout>().is_err());
     }
 }

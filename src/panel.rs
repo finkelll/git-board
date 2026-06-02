@@ -4,10 +4,13 @@ pub enum PanelKind {
     Config,
     QuickLook,
     AuthLogin,
+    Destroy,
+    DestroyMassiveConfirm,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ConfigRow {
+    Layout,
     Interval,
     Limit,
     CursorAutoHide,
@@ -17,7 +20,8 @@ pub enum ConfigRow {
 }
 
 impl ConfigRow {
-    pub const ROWS: [Self; 6] = [
+    pub const ROWS: [Self; 7] = [
+        Self::Layout,
         Self::Interval,
         Self::Limit,
         Self::CursorAutoHide,
@@ -37,6 +41,7 @@ impl ConfigRow {
     pub fn label(self) -> &'static str {
         match self {
             Self::Interval => "interval",
+            Self::Layout => "layout",
             Self::Limit => "limit",
             Self::CursorAutoHide => "cursor",
             Self::CursorHideAfter => "hide after",
@@ -48,6 +53,7 @@ impl ConfigRow {
     pub fn hint(self) -> &'static str {
         match self {
             Self::Interval => "←/→ or -/+ adjusts by 1s",
+            Self::Layout => "←/→ cycles",
             Self::Limit => "←/→ or -/+ adjusts by 1",
             Self::CursorAutoHide => "←/→ toggles",
             Self::CursorHideAfter => "←/→ or -/+ adjusts by 1s",
@@ -95,12 +101,26 @@ impl Panel {
         }
     }
 
+    pub fn destroy() -> Self {
+        Self {
+            kind: PanelKind::Destroy,
+        }
+    }
+
+    pub fn destroy_massive_confirm() -> Self {
+        Self {
+            kind: PanelKind::DestroyMassiveConfirm,
+        }
+    }
+
     pub fn title(self) -> &'static str {
         match self.kind {
             PanelKind::Keys => "Key Commands",
             PanelKind::Config => "Config",
             PanelKind::QuickLook => "Quick Look",
             PanelKind::AuthLogin => "GitHub Authentication",
+            PanelKind::Destroy => "Destroy Sessions",
+            PanelKind::DestroyMassiveConfirm => "Confirm Massive Destroy",
         }
     }
 
@@ -108,6 +128,9 @@ impl Panel {
         match self.kind {
             PanelKind::Keys => &[
                 ("r", "Refresh immediately"),
+                ("l", "Cycle run layout"),
+                ("s", "Cycle run sort"),
+                ("d", "Open destroy sessions prompt"),
                 ("h", "Toggle cursor auto-hide"),
                 ("⇥", "Switch between Actions and pull request screens"),
                 ("c", "Open config panel"),
@@ -116,7 +139,11 @@ impl Panel {
                 ("↑ / ↓", "Show or move the navigation cursor"),
                 ("↵", "Open selected run or pull request in browser"),
             ],
-            PanelKind::Config | PanelKind::QuickLook | PanelKind::AuthLogin => &[],
+            PanelKind::Config
+            | PanelKind::QuickLook
+            | PanelKind::AuthLogin
+            | PanelKind::Destroy
+            | PanelKind::DestroyMassiveConfirm => &[],
         }
     }
 }

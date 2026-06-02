@@ -344,6 +344,7 @@ mod tests {
                 hide_after: std::time::Duration::from_secs(5),
             },
             global: false,
+            layout: crate::config::DashboardLayout::InProgress,
         };
 
         let runs = fetch_runs("owner/repo", &settings, &runner).unwrap();

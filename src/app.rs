@@ -1,6 +1,6 @@
-use crate::cache::{GlobalCacheSession, GlobalCacheStatus, GlobalCacheWorker};
+use crate::cache::{self, GlobalCacheSession, GlobalCacheStatus, GlobalCacheWorker};
 use crate::columns::{parse_columns_csv, parse_pr_columns_csv};
-use crate::config::{CursorSettings, Settings};
+use crate::config::{CursorSettings, DashboardLayout, Settings};
 use crate::gh::{self, SystemRunner};
 use crate::model::{PullRequest, Run};
 use crate::panel::{ConfigRow, Panel, PanelKind};
@@ -64,10 +64,14 @@ pub struct State {
     pub auth_prompt_focus: usize,
     pub auth_prompt_dismissed: bool,
     pub auth_login_requested: bool,
+    pub destroy_prompt_focus: usize,
+    pub destroy_massive_focus: usize,
     pub config_draft: Option<ConfigDraft>,
     pub config_focus: usize,
     pub config_text_cursor: usize,
     pub quick_look_scroll: usize,
+    pub keys_scroll: usize,
+    pub run_sort: RunSort,
     pub settings: Settings,
     pub global_cache_status: Option<GlobalCacheStatus>,
 }
@@ -78,8 +82,31 @@ pub enum Screen {
     PullRequests,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RunSort {
+    TimeDescSuccessesLast,
+    TimeDesc,
+}
+
+impl RunSort {
+    pub fn next(self) -> Self {
+        match self {
+            Self::TimeDescSuccessesLast => Self::TimeDesc,
+            Self::TimeDesc => Self::TimeDescSuccessesLast,
+        }
+    }
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::TimeDescSuccessesLast => "time desc, successes last",
+            Self::TimeDesc => "time desc",
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct ConfigDraft {
+    pub layout: DashboardLayout,
     pub interval: Duration,
     pub limit: usize,
     pub columns: String,
@@ -90,6 +117,7 @@ pub struct ConfigDraft {
 impl ConfigDraft {
     fn from_state(state: &State) -> Self {
         Self {
+            layout: state.settings.layout,
             interval: state.settings.interval,
             limit: state.settings.limit,
             columns: state
@@ -135,10 +163,14 @@ fn run_loop(
         auth_prompt_focus: 0,
         auth_prompt_dismissed: false,
         auth_login_requested: false,
+        destroy_prompt_focus: 1,
+        destroy_massive_focus: 1,
         config_draft: None,
         config_focus: 0,
         config_text_cursor: 0,
         quick_look_scroll: 0,
+        keys_scroll: 0,
+        run_sort: RunSort::TimeDescSuccessesLast,
         settings,
         global_cache_status: global_cache.as_ref().and_then(|cache| cache.status().ok()),
     };
@@ -241,6 +273,7 @@ fn handle_key(
     match key.code {
         KeyCode::Char('q') | KeyCode::Esc => true,
         KeyCode::Char('k') => {
+            state.keys_scroll = 0;
             state.panel = Some(Panel::keys());
             false
         }
@@ -253,8 +286,22 @@ fn handle_key(
             open_config_panel(state);
             false
         }
+        KeyCode::Char('d') => {
+            open_destroy_panel(state);
+            false
+        }
         KeyCode::Char('r') => {
             *next_refresh = Instant::now();
+            false
+        }
+        KeyCode::Char('l') => {
+            state.settings.layout = state.settings.layout.next();
+            clamp_selection(state);
+            false
+        }
+        KeyCode::Char('s') => {
+            state.run_sort = state.run_sort.next();
+            clamp_selection(state);
             false
         }
         KeyCode::Tab => {
@@ -293,7 +340,7 @@ fn handle_key(
         KeyCode::Enter => {
             match state.screen {
                 Screen::Runs => {
-                    if let Some(run) = state.runs.get(state.selected_run) {
+                    if let Some(run) = selected_run(state) {
                         let repo = state.repo.clone();
                         let id = run.database_id;
                         thread::spawn(move || {
@@ -344,13 +391,140 @@ fn handle_panel_key(
                 handle_quick_look_key(key, state);
                 false
             }
+            Some(PanelKind::Keys) => {
+                handle_keys_key(key, state);
+                false
+            }
             Some(PanelKind::AuthLogin) => {
                 handle_auth_login_key(key, state);
                 false
             }
-            Some(PanelKind::Keys) | None => false,
+            Some(PanelKind::Destroy) => handle_destroy_key(key, state),
+            Some(PanelKind::DestroyMassiveConfirm) => handle_destroy_massive_key(key, state),
+            None => false,
         },
     }
+}
+
+fn handle_keys_key(key: KeyEvent, state: &mut State) {
+    match key.code {
+        KeyCode::Up => {
+            state.keys_scroll = state.keys_scroll.saturating_sub(1);
+        }
+        KeyCode::Down => {
+            state.keys_scroll = state.keys_scroll.saturating_add(1);
+        }
+        _ => {}
+    }
+}
+
+fn handle_destroy_key(key: KeyEvent, state: &mut State) -> bool {
+    match key.code {
+        KeyCode::Left => {
+            state.destroy_prompt_focus = state.destroy_prompt_focus.saturating_sub(1);
+            false
+        }
+        KeyCode::Right | KeyCode::Tab => {
+            state.destroy_prompt_focus = (state.destroy_prompt_focus + 1).min(2);
+            false
+        }
+        KeyCode::Char('y') | KeyCode::Char('Y') => destroy_repo_clients(state),
+        KeyCode::Char('n') | KeyCode::Char('N') => {
+            close_destroy_panel(state);
+            false
+        }
+        KeyCode::Char('m') | KeyCode::Char('M') => {
+            open_destroy_massive_confirm_panel(state);
+            false
+        }
+        KeyCode::Enter => match state.destroy_prompt_focus {
+            0 => destroy_repo_clients(state),
+            1 => {
+                close_destroy_panel(state);
+                false
+            }
+            _ => {
+                open_destroy_massive_confirm_panel(state);
+                false
+            }
+        },
+        _ => false,
+    }
+}
+
+fn handle_destroy_massive_key(key: KeyEvent, state: &mut State) -> bool {
+    match key.code {
+        KeyCode::Left | KeyCode::Right | KeyCode::Tab => {
+            state.destroy_massive_focus = usize::from(state.destroy_massive_focus == 0);
+            false
+        }
+        KeyCode::Char('y') | KeyCode::Char('Y') => destroy_all_clients(state),
+        KeyCode::Char('n') | KeyCode::Char('N') => {
+            close_destroy_panel(state);
+            false
+        }
+        KeyCode::Enter => {
+            if state.destroy_massive_focus == 0 {
+                destroy_all_clients(state)
+            } else {
+                close_destroy_panel(state);
+                false
+            }
+        }
+        _ => false,
+    }
+}
+
+fn open_destroy_panel(state: &mut State) {
+    state.destroy_prompt_focus = 1;
+    state.panel = Some(Panel::destroy());
+}
+
+fn open_destroy_massive_confirm_panel(state: &mut State) {
+    state.destroy_massive_focus = 1;
+    state.panel = Some(Panel::destroy_massive_confirm());
+}
+
+fn close_destroy_panel(state: &mut State) {
+    state.panel = None;
+}
+
+fn destroy_repo_clients(state: &mut State) -> bool {
+    match cache::repo_client_pids(&state.repo).and_then(kill_other_pids) {
+        Ok(()) => true,
+        Err(error) => {
+            set_error(state, error.to_string());
+            false
+        }
+    }
+}
+
+fn destroy_all_clients(state: &mut State) -> bool {
+    match cache::all_client_pids().and_then(kill_other_pids) {
+        Ok(()) => true,
+        Err(error) => {
+            set_error(state, error.to_string());
+            false
+        }
+    }
+}
+
+fn kill_other_pids(pids: Vec<u32>) -> Result<()> {
+    let current_pid = std::process::id();
+    let targets = pids
+        .into_iter()
+        .filter(|pid| *pid != current_pid)
+        .map(|pid| pid.to_string())
+        .collect::<Vec<_>>();
+
+    if !targets.is_empty() {
+        let status = Command::new("kill").args(&targets).status()?;
+        if !status.success() {
+            anyhow::bail!("kill exited with status {status}");
+        }
+    }
+
+    Ok(())
 }
 
 fn handle_auth_login_key(key: KeyEvent, state: &mut State) {
@@ -442,6 +616,9 @@ fn edit_config_row(state: &mut State, direction: i32) {
         ConfigRow::Interval => {
             draft.interval = adjust_seconds(draft.interval, direction, 5, 3600);
         }
+        ConfigRow::Layout => {
+            draft.layout = draft.layout.next();
+        }
         ConfigRow::Limit => {
             draft.limit = adjust_usize(draft.limit, direction, 1, 200);
         }
@@ -513,6 +690,7 @@ fn apply_config_draft(state: &mut State, next_refresh: &mut Instant) {
     };
 
     state.settings.interval = draft.interval;
+    state.settings.layout = draft.layout;
     state.settings.limit = draft.limit;
     state.settings.columns = columns;
     state.settings.pr_columns = pr_columns;
@@ -656,6 +834,189 @@ fn adjust_usize(value: usize, direction: i32, min: usize, max: usize) -> usize {
     next.clamp(min, max)
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use chrono::{TimeZone, Utc};
+
+    fn run(
+        database_id: u64,
+        workflow_name: &str,
+        head_branch: &str,
+        conclusion: Option<&str>,
+        status: &str,
+        created_minute: u32,
+    ) -> Run {
+        let created_at = Utc
+            .with_ymd_and_hms(2026, 6, 2, 10, created_minute, 0)
+            .unwrap();
+        Run {
+            conclusion: conclusion.map(ToString::to_string),
+            created_at,
+            database_id,
+            display_title: format!("run {database_id}"),
+            event: "push".to_string(),
+            head_branch: head_branch.to_string(),
+            name: workflow_name.to_string(),
+            pr_number: None,
+            started_at: Some(created_at),
+            status: status.to_string(),
+            updated_at: created_at,
+            workflow_name: workflow_name.to_string(),
+        }
+    }
+
+    #[test]
+    fn failure_is_unresolved_without_following_start_or_success() {
+        let runs = vec![run(1, "verify", "main", Some("failure"), "completed", 10)];
+
+        assert!(run_visible_in_layout(
+            &runs[0],
+            &runs,
+            DashboardLayout::InProgress
+        ));
+    }
+
+    #[test]
+    fn newer_start_resolves_same_workflow_branch_failure() {
+        let runs = vec![
+            run(2, "verify", "main", None, "in_progress", 12),
+            run(1, "verify", "main", Some("failure"), "completed", 10),
+        ];
+
+        assert!(!unresolved_failure(&runs[1], &runs));
+    }
+
+    #[test]
+    fn newer_success_resolves_same_workflow_branch_failure() {
+        let runs = vec![
+            run(2, "verify", "main", Some("success"), "completed", 12),
+            run(1, "verify", "main", Some("failure"), "completed", 10),
+        ];
+
+        assert!(!unresolved_failure(&runs[1], &runs));
+    }
+
+    #[test]
+    fn newer_failed_start_resolves_older_same_workflow_branch_failure() {
+        let runs = vec![
+            run(2, "verify", "main", Some("failure"), "completed", 12),
+            run(1, "verify", "main", Some("failure"), "completed", 10),
+        ];
+
+        assert!(!unresolved_failure(&runs[1], &runs));
+        assert!(unresolved_failure(&runs[0], &runs));
+    }
+
+    #[test]
+    fn in_progress_layout_shows_latest_workflow_success() {
+        let runs = vec![run(1, "verify", "main", Some("success"), "completed", 10)];
+
+        assert!(run_visible_in_layout(
+            &runs[0],
+            &runs,
+            DashboardLayout::InProgress
+        ));
+    }
+
+    #[test]
+    fn newer_workflow_entry_hides_older_success() {
+        let runs = vec![
+            run(2, "verify", "main", None, "in_progress", 12),
+            run(1, "verify", "main", Some("success"), "completed", 10),
+        ];
+
+        assert!(!run_visible_in_layout(
+            &runs[1],
+            &runs,
+            DashboardLayout::InProgress
+        ));
+    }
+
+    #[test]
+    fn newer_workflow_entry_on_other_branch_hides_older_success() {
+        let runs = vec![
+            run(2, "verify", "feature", Some("failure"), "completed", 12),
+            run(1, "verify", "main", Some("success"), "completed", 10),
+        ];
+
+        assert!(!run_visible_in_layout(
+            &runs[1],
+            &runs,
+            DashboardLayout::InProgress
+        ));
+    }
+
+    #[test]
+    fn in_progress_layout_sorts_successes_last() {
+        let runs = vec![
+            run(
+                1,
+                "latest-success",
+                "main",
+                Some("success"),
+                "completed",
+                14,
+            ),
+            run(2, "running", "main", None, "in_progress", 12),
+            run(3, "failed", "main", Some("failure"), "completed", 10),
+        ];
+
+        assert_eq!(
+            sorted_visible_run_indices(
+                &runs,
+                DashboardLayout::InProgress,
+                RunSort::TimeDescSuccessesLast
+            ),
+            vec![1, 2, 0]
+        );
+    }
+
+    #[test]
+    fn time_desc_sort_does_not_push_successes_last() {
+        let runs = vec![
+            run(
+                1,
+                "latest-success",
+                "main",
+                Some("success"),
+                "completed",
+                14,
+            ),
+            run(2, "running", "main", None, "in_progress", 12),
+            run(3, "failed", "main", Some("failure"), "completed", 10),
+        ];
+
+        assert_eq!(
+            sorted_visible_run_indices(&runs, DashboardLayout::InProgress, RunSort::TimeDesc),
+            vec![0, 1, 2]
+        );
+    }
+
+    #[test]
+    fn all_layout_sorts_by_time_desc() {
+        let runs = vec![
+            run(1, "old", "main", Some("success"), "completed", 10),
+            run(2, "new", "main", Some("failure"), "completed", 12),
+        ];
+
+        assert_eq!(
+            sorted_visible_run_indices(&runs, DashboardLayout::All, RunSort::TimeDescSuccessesLast),
+            vec![1, 0]
+        );
+    }
+
+    #[test]
+    fn different_branch_success_does_not_resolve_failure() {
+        let runs = vec![
+            run(2, "verify", "feature", Some("success"), "completed", 12),
+            run(1, "verify", "main", Some("failure"), "completed", 10),
+        ];
+
+        assert!(unresolved_failure(&runs[1], &runs));
+    }
+}
+
 #[derive(Debug, Clone, Deserialize, Serialize)]
 struct DashboardData {
     runs: Vec<Run>,
@@ -705,11 +1066,12 @@ fn fetch_dashboard_from_github(repo: &str, settings: &Settings) -> FetchResult {
 }
 
 fn clamp_selection(state: &mut State) {
-    if state.runs.is_empty() {
+    let visible_runs = visible_run_indices(state);
+    if visible_runs.is_empty() {
         state.selected_run = 0;
         state.runs_scroll = 0;
-    } else if state.selected_run >= state.runs.len() {
-        state.selected_run = state.runs.len() - 1;
+    } else if state.selected_run >= visible_runs.len() {
+        state.selected_run = visible_runs.len() - 1;
     }
 
     if state.pull_requests.is_empty() {
@@ -719,7 +1081,7 @@ fn clamp_selection(state: &mut State) {
         state.selected_pr = state.pull_requests.len() - 1;
     }
 
-    state.runs_scroll = state.runs_scroll.min(state.runs.len().saturating_sub(1));
+    state.runs_scroll = state.runs_scroll.min(visible_runs.len().saturating_sub(1));
     state.prs_scroll = state
         .prs_scroll
         .min(state.pull_requests.len().saturating_sub(1));
@@ -734,9 +1096,112 @@ fn selected_mut(state: &mut State) -> &mut usize {
 
 fn selected_len(state: &State) -> usize {
     match state.screen {
-        Screen::Runs => state.runs.len(),
+        Screen::Runs => visible_run_indices(state).len(),
         Screen::PullRequests => state.pull_requests.len(),
     }
+}
+
+pub fn selected_run(state: &State) -> Option<&Run> {
+    visible_run_indices(state)
+        .get(state.selected_run)
+        .and_then(|index| state.runs.get(*index))
+}
+
+pub fn visible_run_indices(state: &State) -> Vec<usize> {
+    sorted_visible_run_indices(&state.runs, state.settings.layout, state.run_sort)
+}
+
+fn sorted_visible_run_indices(runs: &[Run], layout: DashboardLayout, sort: RunSort) -> Vec<usize> {
+    let mut indices = runs
+        .iter()
+        .enumerate()
+        .filter_map(|(index, run)| run_visible_in_layout(run, runs, layout).then_some(index))
+        .collect::<Vec<_>>();
+
+    indices.sort_by(|left, right| compare_runs_for_sort(&runs[*left], &runs[*right], layout, sort));
+    indices
+}
+
+fn compare_runs_for_sort(
+    left: &Run,
+    right: &Run,
+    layout: DashboardLayout,
+    sort: RunSort,
+) -> std::cmp::Ordering {
+    let left_success = run_succeeded(left);
+    let right_success = run_succeeded(right);
+
+    if layout == DashboardLayout::InProgress
+        && sort == RunSort::TimeDescSuccessesLast
+        && left_success != right_success
+    {
+        return left_success.cmp(&right_success);
+    }
+
+    right
+        .created_at
+        .cmp(&left.created_at)
+        .then_with(|| right.database_id.cmp(&left.database_id))
+}
+
+fn run_visible_in_layout(run: &Run, runs: &[Run], layout: DashboardLayout) -> bool {
+    match layout {
+        DashboardLayout::All => true,
+        DashboardLayout::InProgress => {
+            run_in_progress(run)
+                || unresolved_failure(run, runs)
+                || latest_workflow_success(run, runs)
+        }
+    }
+}
+
+fn run_in_progress(run: &Run) -> bool {
+    matches!(
+        run.status.as_str(),
+        "queued" | "in_progress" | "requested" | "waiting" | "pending"
+    )
+}
+
+fn unresolved_failure(run: &Run, runs: &[Run]) -> bool {
+    if !run_failed(run) {
+        return false;
+    }
+
+    !runs.iter().any(|candidate| {
+        same_workflow_branch(run, candidate)
+            && candidate.created_at > run.created_at
+            && (run_started(candidate) || run_succeeded(candidate))
+    })
+}
+
+fn run_failed(run: &Run) -> bool {
+    matches!(
+        run.status_label(),
+        "failure" | "cancelled" | "timed_out" | "startup_failure" | "action_required"
+    )
+}
+
+fn run_succeeded(run: &Run) -> bool {
+    run.status_label() == "success"
+}
+
+fn latest_workflow_success(run: &Run, runs: &[Run]) -> bool {
+    run_succeeded(run)
+        && !runs
+            .iter()
+            .any(|candidate| same_workflow(run, candidate) && candidate.created_at > run.created_at)
+}
+
+fn run_started(run: &Run) -> bool {
+    run.started_at.is_some()
+}
+
+fn same_workflow_branch(left: &Run, right: &Run) -> bool {
+    left.workflow_label() == right.workflow_label() && left.head_branch == right.head_branch
+}
+
+fn same_workflow(left: &Run, right: &Run) -> bool {
+    left.workflow_label() == right.workflow_label()
 }
 
 fn draft_text_for_focus(draft: &ConfigDraft, focus: usize) -> &str {
