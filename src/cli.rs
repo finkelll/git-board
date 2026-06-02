@@ -68,9 +68,17 @@ pub struct Cli {
     #[arg(
         long = "global",
         action = ArgAction::SetTrue,
-        help = "Share a temp cache between git-board clients for the same repo"
+        conflicts_with = "independent",
+        help = "Share a temp cache between git-board clients for the same repo (default)"
     )]
     pub global: bool,
+
+    #[arg(
+        long = "independent",
+        action = ArgAction::SetTrue,
+        help = "Run without the shared temp cache used by other git-board clients"
+    )]
+    pub independent: bool,
 }
 
 impl Cli {

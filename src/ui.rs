@@ -8,6 +8,13 @@ use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Cell, Clear, Paragraph, Row, Table, TableState, Wrap};
 use ratatui::Frame;
+use std::time::Duration;
+
+#[derive(Debug)]
+struct TitleStatus {
+    text: String,
+    stale_age: Option<Duration>,
+}
 
 pub fn draw(frame: &mut Frame<'_>, state: &mut State) {
     let area = frame.area();
@@ -15,26 +22,33 @@ pub fn draw(frame: &mut Frame<'_>, state: &mut State) {
         Screen::Runs => "=== GitHub Actions ===",
         Screen::PullRequests => "=== Open Pull Requests ===",
     };
+    let title = title_with_global_status(title, state);
     let last_check = state
         .last_check
         .map(|time| time.format("%Y-%m-%d %H:%M:%S%.3f").to_string())
         .unwrap_or_else(|| "not checked yet".to_string());
     let refresh = refresh_indicator(state);
-    let inline_header =
-        title.chars().count() + last_check.chars().count() + refresh.chars().count() + 4
-            <= usize::from(area.width);
+    let inline_header = title.text.chars().count()
+        + stale_title_text(&title).chars().count()
+        + last_check.chars().count()
+        + refresh.chars().count()
+        + 4
+        <= usize::from(area.width);
 
-    let (table_area, footer_area) = if inline_header {
+    let has_error = state.error.is_some();
+    let error_height = if has_error { 1 } else { 0 };
+    let (table_area, error_area, footer_area) = if inline_header {
         let chunks = Layout::default()
             .direction(Direction::Vertical)
             .constraints([
                 Constraint::Length(1),
                 Constraint::Min(5),
+                Constraint::Length(error_height),
                 Constraint::Length(1),
             ])
             .split(area);
-        frame.render_widget(header_line(title, &last_check, refresh, true), chunks[0]);
-        (chunks[1], chunks[2])
+        frame.render_widget(header_line(&title, &last_check, refresh, true), chunks[0]);
+        (chunks[1], chunks[2], chunks[3])
     } else {
         let chunks = Layout::default()
             .direction(Direction::Vertical)
@@ -42,12 +56,13 @@ pub fn draw(frame: &mut Frame<'_>, state: &mut State) {
                 Constraint::Length(1),
                 Constraint::Length(1),
                 Constraint::Min(5),
+                Constraint::Length(error_height),
                 Constraint::Length(1),
             ])
             .split(area);
-        frame.render_widget(header_line(title, &last_check, refresh, false), chunks[0]);
+        frame.render_widget(header_line(&title, &last_check, refresh, false), chunks[0]);
         frame.render_widget(check_line(&last_check, refresh), chunks[1]);
-        (chunks[2], chunks[3])
+        (chunks[2], chunks[3], chunks[4])
     };
 
     match state.screen {
@@ -56,6 +71,9 @@ pub fn draw(frame: &mut Frame<'_>, state: &mut State) {
     }
 
     let footer = footer(state);
+    if has_error {
+        frame.render_widget(error_line(state), error_area);
+    }
     frame.render_widget(footer, footer_area);
 
     if let Some(panel) = state.panel {
@@ -63,13 +81,52 @@ pub fn draw(frame: &mut Frame<'_>, state: &mut State) {
     }
 }
 
-fn header_line(title: &str, last_check: &str, refresh: &str, include_check: bool) -> Line<'static> {
+fn title_with_global_status(title: &str, state: &State) -> TitleStatus {
+    if !state.settings.global {
+        return TitleStatus {
+            text: format!("{title} 🐺"),
+            stale_age: None,
+        };
+    }
+
+    let Some(status) = state.global_cache_status else {
+        return TitleStatus {
+            text: title.to_string(),
+            stale_age: None,
+        };
+    };
+
+    let clients = if status.client_count == 1 {
+        "1 client".to_string()
+    } else {
+        format!("{} clients", status.client_count)
+    };
+    let stale_age = status
+        .cache_age
+        .filter(|age| *age > state.settings.interval.mul_f64(1.2));
+
+    let text = if status.is_owner {
+        format!("{title} 🐓 [{clients}]")
+    } else {
+        format!("{title} 🐥 [{clients}]")
+    };
+
+    TitleStatus { text, stale_age }
+}
+
+fn header_line(
+    title: &TitleStatus,
+    last_check: &str,
+    refresh: &str,
+    include_check: bool,
+) -> Line<'static> {
     let mut spans = vec![Span::styled(
-        title.to_string(),
+        title.text.clone(),
         Style::default()
             .fg(Color::Cyan)
             .add_modifier(Modifier::BOLD),
     )];
+    spans.extend(stale_title_spans(title));
 
     if include_check {
         spans.push(Span::raw("  "));
@@ -77,6 +134,24 @@ fn header_line(title: &str, last_check: &str, refresh: &str, include_check: bool
     }
 
     Line::from(spans)
+}
+
+fn stale_title_spans(title: &TitleStatus) -> Vec<Span<'static>> {
+    title.stale_age.map_or_else(Vec::new, |age| {
+        vec![
+            Span::raw(" "),
+            Span::styled(
+                format!("STALE {}", humantime::format_duration(age)),
+                Style::default().fg(Color::Red).add_modifier(Modifier::BOLD),
+            ),
+        ]
+    })
+}
+
+fn stale_title_text(title: &TitleStatus) -> String {
+    title.stale_age.map_or_else(String::new, |age| {
+        format!(" STALE {}", humantime::format_duration(age))
+    })
 }
 
 fn check_line(last_check: &str, refresh: &str) -> Line<'static> {
@@ -306,14 +381,6 @@ fn footer(state: &State) -> Line<'static> {
         Span::raw("  "),
     ];
 
-    if let Some(error) = &state.error {
-        spans.push(Span::styled(
-            truncate_owned(error, 80),
-            Style::default().fg(Color::Red),
-        ));
-        spans.push(Span::raw("  "));
-    }
-
     spans.push(Span::styled(
         match state.screen {
             Screen::Runs => {
@@ -327,6 +394,14 @@ fn footer(state: &State) -> Line<'static> {
     ));
 
     Line::from(spans)
+}
+
+fn error_line(state: &State) -> Line<'static> {
+    let error = state.error.as_deref().unwrap_or_default();
+    Line::from(vec![
+        Span::styled("error ", Style::default().fg(Color::DarkGray)),
+        Span::styled(truncate_owned(error, 140), Style::default().fg(Color::Red)),
+    ])
 }
 
 fn refresh_indicator(state: &State) -> &'static str {
@@ -394,6 +469,7 @@ fn panel_lines(panel: Panel, state: &State) -> Vec<Line<'static>> {
         lines = match panel.kind {
             PanelKind::Config => config_lines(state),
             PanelKind::QuickLook => quick_look_lines(state),
+            PanelKind::AuthLogin => auth_login_lines(state),
             PanelKind::Keys => Vec::new(),
         };
     }
@@ -403,6 +479,34 @@ fn panel_lines(panel: Panel, state: &State) -> Vec<Line<'static>> {
         lines.push(panel_footer(panel));
     }
     lines
+}
+
+fn auth_login_lines(state: &State) -> Vec<Line<'static>> {
+    vec![
+        Line::from("GitHub authentication failed."),
+        Line::from("Run gh auth login for this terminal session?"),
+        Line::from(""),
+        Line::from(vec![
+            auth_choice_span("YES", state.auth_prompt_focus == 0),
+            Span::raw("  "),
+            auth_choice_span("NO", state.auth_prompt_focus == 1),
+        ]),
+    ]
+}
+
+fn auth_choice_span(label: &str, focused: bool) -> Span<'static> {
+    let style = if focused {
+        Style::default()
+            .fg(Color::Black)
+            .bg(Color::Yellow)
+            .add_modifier(Modifier::BOLD)
+    } else {
+        Style::default()
+            .fg(Color::Yellow)
+            .add_modifier(Modifier::BOLD)
+    };
+
+    Span::styled(format!(" {label} "), style)
 }
 
 fn quick_look_lines(state: &State) -> Vec<Line<'static>> {
@@ -583,6 +687,7 @@ fn panel_footer(panel: Panel) -> Line<'static> {
         PanelKind::Config => "↑/↓ selects  ←/→ or -/+ edit  q/ESC cancel  ↵ accept",
         PanelKind::Keys => "q / ESC closes this panel",
         PanelKind::QuickLook => "↑/↓ scroll  ␣ / q / ESC closes this panel",
+        PanelKind::AuthLogin => "←/→ choose  ↵ confirm  Y yes  N no  ESC closes this panel",
     };
     Line::from(Span::styled(text, Style::default().fg(Color::DarkGray)))
 }

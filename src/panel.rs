@@ -3,6 +3,7 @@ pub enum PanelKind {
     Keys,
     Config,
     QuickLook,
+    AuthLogin,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -88,11 +89,18 @@ impl Panel {
         }
     }
 
+    pub fn auth_login() -> Self {
+        Self {
+            kind: PanelKind::AuthLogin,
+        }
+    }
+
     pub fn title(self) -> &'static str {
         match self.kind {
             PanelKind::Keys => "Key Commands",
             PanelKind::Config => "Config",
             PanelKind::QuickLook => "Quick Look",
+            PanelKind::AuthLogin => "GitHub Authentication",
         }
     }
 
@@ -108,7 +116,7 @@ impl Panel {
                 ("↑ / ↓", "Show or move the navigation cursor"),
                 ("↵", "Open selected run or pull request in browser"),
             ],
-            PanelKind::Config | PanelKind::QuickLook => &[],
+            PanelKind::Config | PanelKind::QuickLook | PanelKind::AuthLogin => &[],
         }
     }
 }

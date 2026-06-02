@@ -3,7 +3,9 @@
 Live terminal dashboard for GitHub Actions runs.
 
 `git-board` uses the GitHub CLI for data, so it reuses your existing `gh auth`
-session and repository access.
+session and repository access. If GitHub CLI authentication is missing or
+invalid, `git-board` shows an authentication prompt and can run
+`gh auth login -h github.com` from the current terminal.
 
 ## Screenshots
 
@@ -39,13 +41,19 @@ git-board --pr-columns status,title,author,branch,base,number,age,updated
 git-board --branch main --workflow verify --status in_progress
 git-board --no-cursor-auto-hide
 git-board --cursor-hide-after 10s
-git-board --global
+git-board --independent
 ```
 
-`--global` shares a temporary cache between `git-board` clients opened on the
-same repository. The first client owns refreshes and writes the cache; other
-clients read it. The cache is removed when the last client for that repository
-exits.
+By default, `git-board` shares a temporary cache between clients opened on the
+same repository. One live client owns refreshes and writes the cache; other
+clients read it. If the owner exits or stops heartbeating, another client can
+take over refreshes. The title shows the number of live clients and marks the
+current mode: `🐓 [N clients]` for the refresh owner, `🐥 [N clients]` for a
+shared non-owner, and `🐺` for independent mode. The cache is
+marked stale in the title when it is older than 1.2x the configured refresh
+interval. The cache is removed when the last client for that repository exits.
+Use `--independent` to run a process with its own refresh loop instead of the
+shared cache.
 
 Keys:
 
@@ -66,6 +74,14 @@ In the config panel, `↑` / `↓` changes the focused setting, `←` /
 `→`, `-`, and `+` edit values, `←` / `→` moves the cursor inside
 the columns field, `↵` accepts the draft settings, and `q` / `ESC` cancels
 without applying changes.
+
+If GitHub authentication is not valid, an authentication panel asks whether to
+run `gh auth login`. Choose with `←` / `→` and confirm with `↵`, or press
+`Y` / `N`. `q` or `ESC` closes the prompt for the current client session.
+
+Refresh and cache errors are shown on a separate error line above the footer and
+remain visible until a successful refresh clears them or a newer error replaces
+them.
 
 ## Configuration
 

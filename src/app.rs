@@ -1,4 +1,4 @@
-use crate::cache::{GlobalCacheSession, GlobalCacheWorker};
+use crate::cache::{GlobalCacheSession, GlobalCacheStatus, GlobalCacheWorker};
 use crate::columns::{parse_columns_csv, parse_pr_columns_csv};
 use crate::config::{CursorSettings, Settings};
 use crate::gh::{self, SystemRunner};
@@ -16,6 +16,7 @@ use ratatui::backend::CrosstermBackend;
 use ratatui::Terminal;
 use serde::{Deserialize, Serialize};
 use std::io;
+use std::process::{Command, Stdio};
 use std::sync::mpsc::{self, Receiver};
 use std::thread;
 use std::time::{Duration, Instant};
@@ -60,11 +61,15 @@ pub struct State {
     pub tick: u64,
     pub error: Option<String>,
     pub panel: Option<Panel>,
+    pub auth_prompt_focus: usize,
+    pub auth_prompt_dismissed: bool,
+    pub auth_login_requested: bool,
     pub config_draft: Option<ConfigDraft>,
     pub config_focus: usize,
     pub config_text_cursor: usize,
     pub quick_look_scroll: usize,
     pub settings: Settings,
+    pub global_cache_status: Option<GlobalCacheStatus>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -127,12 +132,17 @@ fn run_loop(
         tick: 0,
         error: None,
         panel: None,
+        auth_prompt_focus: 0,
+        auth_prompt_dismissed: false,
+        auth_login_requested: false,
         config_draft: None,
         config_focus: 0,
         config_text_cursor: 0,
         quick_look_scroll: 0,
         settings,
+        global_cache_status: global_cache.as_ref().and_then(|cache| cache.status().ok()),
     };
+    maybe_open_auth_prompt(&mut state);
 
     let mut next_refresh = Instant::now();
     let mut last_tick = Instant::now();
@@ -154,8 +164,9 @@ fn run_loop(
         }
 
         if let Some(cache) = &mut global_cache {
-            if let Err(error) = cache.maintain() {
-                state.error = Some(error.to_string());
+            match cache.maintain() {
+                Ok(status) => state.global_cache_status = Some(status),
+                Err(error) => set_error(&mut state, error.to_string()),
             }
         }
 
@@ -177,10 +188,11 @@ fn run_loop(
                         Ok(runs) => {
                             state.runs = runs.runs;
                             state.pull_requests = runs.pull_requests;
-                            state.error = None;
+                            clear_error(&mut state);
+                            state.auth_prompt_dismissed = false;
                             clamp_selection(&mut state);
                         }
-                        Err(error) => state.error = Some(error.to_string()),
+                        Err(error) => set_error(&mut state, error.to_string()),
                     }
                     pending = None;
                     next_refresh = Instant::now() + state.settings.interval;
@@ -189,7 +201,7 @@ fn run_loop(
                 Err(mpsc::TryRecvError::Disconnected) => {
                     state.loading = false;
                     state.last_check = Some(Local::now());
-                    state.error = Some("refresh worker disconnected".to_string());
+                    set_error(&mut state, "refresh worker disconnected".to_string());
                     pending = None;
                     next_refresh = Instant::now() + state.settings.interval;
                 }
@@ -206,6 +218,10 @@ fn run_loop(
                     }
                 }
             }
+        }
+
+        if state.auth_login_requested {
+            run_gh_auth_login(terminal, &mut state, &mut next_refresh)?;
         }
     }
 
@@ -309,6 +325,12 @@ fn handle_panel_key(
 ) -> bool {
     match key.code {
         KeyCode::Char('q') | KeyCode::Esc => {
+            if state
+                .panel
+                .is_some_and(|panel| panel.kind == PanelKind::AuthLogin)
+            {
+                state.auth_prompt_dismissed = true;
+            }
             state.panel = None;
             state.config_draft = None;
             false
@@ -322,9 +344,46 @@ fn handle_panel_key(
                 handle_quick_look_key(key, state);
                 false
             }
+            Some(PanelKind::AuthLogin) => {
+                handle_auth_login_key(key, state);
+                false
+            }
             Some(PanelKind::Keys) | None => false,
         },
     }
+}
+
+fn handle_auth_login_key(key: KeyEvent, state: &mut State) {
+    match key.code {
+        KeyCode::Left | KeyCode::Right | KeyCode::Tab => {
+            state.auth_prompt_focus = usize::from(state.auth_prompt_focus == 0);
+        }
+        KeyCode::Char('y') | KeyCode::Char('Y') => {
+            request_auth_login(state);
+        }
+        KeyCode::Char('n') | KeyCode::Char('N') => {
+            dismiss_auth_prompt(state);
+        }
+        KeyCode::Enter => {
+            if state.auth_prompt_focus == 0 {
+                request_auth_login(state);
+            } else {
+                dismiss_auth_prompt(state);
+            }
+        }
+        _ => {}
+    }
+}
+
+fn request_auth_login(state: &mut State) {
+    state.panel = None;
+    state.auth_prompt_dismissed = true;
+    state.auth_login_requested = true;
+}
+
+fn dismiss_auth_prompt(state: &mut State) {
+    state.panel = None;
+    state.auth_prompt_dismissed = true;
 }
 
 fn handle_quick_look_key(key: KeyEvent, state: &mut State) {
@@ -395,7 +454,7 @@ fn edit_config_row(state: &mut State, direction: i32) {
     }
 
     if focused.is_text_field() {
-        state.error = None;
+        clear_error(state);
     }
 }
 
@@ -441,14 +500,14 @@ fn apply_config_draft(state: &mut State, next_refresh: &mut Instant) {
     let columns = match parse_columns_csv(&draft.columns) {
         Ok(columns) => columns,
         Err(error) => {
-            state.error = Some(error.to_string());
+            set_error(state, error.to_string());
             return;
         }
     };
     let pr_columns = match parse_pr_columns_csv(&draft.pr_columns) {
         Ok(columns) => columns,
         Err(error) => {
-            state.error = Some(error.to_string());
+            set_error(state, error.to_string());
             return;
         }
     };
@@ -460,9 +519,69 @@ fn apply_config_draft(state: &mut State, next_refresh: &mut Instant) {
     state.settings.cursor = draft.cursor;
     state.panel = None;
     state.config_draft = None;
-    state.error = None;
+    clear_error(state);
 
     *next_refresh = Instant::now();
+}
+
+fn set_error(state: &mut State, error: String) {
+    maybe_open_auth_prompt(state);
+    state.error = Some(error);
+}
+
+fn clear_error(state: &mut State) {
+    state.error = None;
+}
+
+fn maybe_open_auth_prompt(state: &mut State) {
+    if state.auth_prompt_dismissed || state.panel.is_some() || gh_is_authenticated() {
+        return;
+    }
+
+    state.auth_prompt_focus = 0;
+    state.panel = Some(Panel::auth_login());
+}
+
+fn gh_is_authenticated() -> bool {
+    Command::new("gh")
+        .args(["auth", "status", "-h", "github.com"])
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()
+        .is_ok_and(|status| status.success())
+}
+
+fn run_gh_auth_login(
+    terminal: &mut Terminal<CrosstermBackend<io::Stdout>>,
+    state: &mut State,
+    next_refresh: &mut Instant,
+) -> Result<()> {
+    state.auth_login_requested = false;
+
+    disable_raw_mode()?;
+    execute!(terminal.backend_mut(), LeaveAlternateScreen)?;
+    terminal.show_cursor()?;
+
+    let status = Command::new("gh")
+        .args(["auth", "login", "-h", "github.com"])
+        .status();
+
+    execute!(terminal.backend_mut(), EnterAlternateScreen)?;
+    enable_raw_mode()?;
+    terminal.clear()?;
+
+    match status {
+        Ok(status) if status.success() => {
+            clear_error(state);
+            state.auth_prompt_dismissed = false;
+            *next_refresh = Instant::now();
+        }
+        Ok(status) => set_error(state, format!("gh auth login exited with status {status}")),
+        Err(error) => set_error(state, format!("failed to run gh auth login: {error}")),
+    }
+
+    Ok(())
 }
 
 fn open_config_panel(state: &mut State) {

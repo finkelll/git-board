@@ -116,7 +116,7 @@ impl Settings {
                 event: non_empty(args.event).or_else(|| non_empty(file_filters.event)),
             },
             cursor,
-            global: args.global,
+            global: !args.independent,
         })
     }
 }

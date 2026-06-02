@@ -22,6 +22,13 @@ pub struct GlobalCacheWorker {
     is_owner: bool,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct GlobalCacheStatus {
+    pub is_owner: bool,
+    pub client_count: usize,
+    pub cache_age: Option<Duration>,
+}
+
 impl GlobalCacheSession {
     pub fn register(repo: &str) -> Result<Self> {
         let repo_dir = cache_root().join(repo_key(repo));
@@ -44,7 +51,7 @@ impl GlobalCacheSession {
         })
     }
 
-    pub fn maintain(&mut self) -> Result<()> {
+    pub fn maintain(&mut self) -> Result<GlobalCacheStatus> {
         write_file(&self.client_path, "")?;
 
         if self.is_owner {
@@ -54,7 +61,17 @@ impl GlobalCacheSession {
             self.is_owner = claim_owner(&self.owner_path)?;
         }
 
-        Ok(())
+        self.status()
+    }
+
+    pub fn status(&self) -> Result<GlobalCacheStatus> {
+        let clients_dir = self.repo_dir.join("clients");
+        remove_stale_clients(&clients_dir)?;
+        Ok(GlobalCacheStatus {
+            is_owner: self.is_owner,
+            client_count: client_count(&clients_dir)?,
+            cache_age: modified_age(&self.repo_dir.join("cache.json"))?,
+        })
     }
 
     pub fn worker(&self) -> GlobalCacheWorker {
@@ -187,6 +204,20 @@ fn remove_stale_clients(clients_dir: &PathBuf) -> Result<()> {
     }
 
     Ok(())
+}
+
+fn client_count(clients_dir: &PathBuf) -> Result<usize> {
+    let Ok(entries) = fs::read_dir(clients_dir) else {
+        return Ok(0);
+    };
+
+    let mut count = 0;
+    for entry in entries {
+        entry?;
+        count += 1;
+    }
+
+    Ok(count)
 }
 
 fn modified_age(path: &PathBuf) -> Result<Option<Duration>> {
