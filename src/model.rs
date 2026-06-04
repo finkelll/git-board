@@ -4,17 +4,26 @@ use serde::{Deserialize, Serialize};
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Run {
+    pub attempt: Option<u64>,
     pub conclusion: Option<String>,
     pub created_at: DateTime<Utc>,
     pub database_id: u64,
     pub display_title: String,
     pub event: String,
     pub head_branch: String,
+    pub head_sha: Option<String>,
     pub name: String,
+    pub number: Option<u64>,
+    #[serde(default)]
+    pub failure_data: Vec<String>,
+    #[serde(default)]
+    pub failure_reason: Option<String>,
     pub pr_number: Option<u64>,
     pub started_at: Option<DateTime<Utc>>,
     pub status: String,
     pub updated_at: DateTime<Utc>,
+    pub url: Option<String>,
+    pub workflow_database_id: Option<u64>,
     pub workflow_name: String,
 }
 
@@ -71,5 +80,14 @@ impl Run {
             .as_deref()
             .filter(|value| !value.trim().is_empty())
             .unwrap_or(&self.status)
+    }
+
+    pub fn failure_label(&self) -> Option<&str> {
+        match self.status_label() {
+            "failure" | "cancelled" | "timed_out" | "startup_failure" | "action_required" => {
+                Some(self.status_label())
+            }
+            _ => None,
+        }
     }
 }

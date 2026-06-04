@@ -7,11 +7,12 @@ use std::process::Command;
 
 const JSON_FIELDS: &str = concat!(
     "attempt,conclusion,createdAt,databaseId,displayTitle,event,headBranch,",
-    "headSha,name,number,startedAt,status,updatedAt,workflowDatabaseId,workflowName"
+    "headSha,name,number,startedAt,status,updatedAt,url,workflowDatabaseId,workflowName"
 );
 const PR_JSON_FIELDS: &str =
     "author,baseRefName,createdAt,headRefName,isDraft,number,title,updatedAt";
 const RUN_PR_JSON_FIELDS: &str = "headRefName,number";
+const RUN_FAILURE_JSON_FIELDS: &str = "jobs";
 
 pub trait CommandRunner {
     fn run(&self, program: &str, args: &[String]) -> Result<String>;
@@ -82,6 +83,7 @@ pub fn fetch_runs(
     let output = runner.run("gh", &args)?;
     let mut runs = parse_runs(&output)?;
     populate_run_pr_numbers(repo, &mut runs, runner)?;
+    populate_run_failure_details(repo, &mut runs, runner);
     Ok(runs)
 }
 
@@ -209,8 +211,45 @@ fn run_pr_list_args(repo: &str, run_count: usize) -> Vec<String> {
     ]
 }
 
+fn populate_run_failure_details(repo: &str, runs: &mut [Run], runner: &impl CommandRunner) {
+    for run in runs.iter_mut().filter(|run| run.failure_label().is_some()) {
+        let Some(run_label) = run.failure_label() else {
+            continue;
+        };
+        let args = run_failure_args(repo, run.database_id);
+        match runner.run("gh", &args).and_then(|output| {
+            parse_run_failure_detail(&output).map(|view| summarize_failure(&view, run_label))
+        }) {
+            Ok(detail) => {
+                run.failure_reason = Some(detail.reason);
+                run.failure_data = detail.data;
+            }
+            Err(error) => {
+                run.failure_reason = Some(format!("could not load failure detail: {error}"));
+                run.failure_data = Vec::new();
+            }
+        }
+    }
+}
+
+fn run_failure_args(repo: &str, id: u64) -> Vec<String> {
+    vec![
+        "run".to_string(),
+        "view".to_string(),
+        id.to_string(),
+        "--repo".to_string(),
+        repo.to_string(),
+        "--json".to_string(),
+        RUN_FAILURE_JSON_FIELDS.to_string(),
+    ]
+}
+
 fn parse_runs(output: &str) -> Result<Vec<Run>> {
     serde_json::from_str(output).context("failed to parse gh run list JSON")
+}
+
+fn parse_run_failure_detail(output: &str) -> Result<RunFailureView> {
+    serde_json::from_str(output).context("failed to parse gh run view JSON")
 }
 
 fn parse_run_pull_requests(output: &str) -> Result<Vec<RunPullRequest>> {
@@ -226,6 +265,118 @@ fn parse_pull_requests(output: &str) -> Result<Vec<PullRequest>> {
 struct RunPullRequest {
     head_ref_name: String,
     number: u64,
+}
+
+#[derive(Debug)]
+struct RunFailureDetail {
+    reason: String,
+    data: Vec<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct RunFailureView {
+    #[serde(default)]
+    jobs: Vec<RunFailureJob>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct RunFailureJob {
+    conclusion: Option<String>,
+    name: String,
+    #[serde(default)]
+    status: String,
+    #[serde(default)]
+    steps: Vec<RunFailureStep>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct RunFailureStep {
+    conclusion: Option<String>,
+    name: String,
+    number: Option<u64>,
+    #[serde(default)]
+    status: String,
+}
+
+fn summarize_failure(view: &RunFailureView, run_label: &str) -> RunFailureDetail {
+    let mut data = Vec::new();
+    let mut first_failed_job = None;
+    let mut first_failed_step = None;
+
+    for job in &view.jobs {
+        let Some(job_label) = failure_label(&job.status, job.conclusion.as_deref()) else {
+            continue;
+        };
+
+        data.push(format!(
+            "job {}: {}",
+            job.name,
+            display_failure_label(job_label)
+        ));
+        if first_failed_job.is_none() {
+            first_failed_job = Some(format!(
+                "{} ({})",
+                job.name,
+                display_failure_label(job_label)
+            ));
+        }
+
+        for step in &job.steps {
+            let Some(step_label) = failure_label(&step.status, step.conclusion.as_deref()) else {
+                continue;
+            };
+            data.push(format!(
+                "step {}: {}",
+                step_label_prefix(&job.name, step),
+                display_failure_label(step_label)
+            ));
+            if first_failed_step.is_none() {
+                first_failed_step = Some(format!(
+                    "{} / {} ({})",
+                    job.name,
+                    step.name,
+                    display_failure_label(step_label)
+                ));
+            }
+        }
+    }
+
+    let reason = first_failed_step
+        .or(first_failed_job)
+        .unwrap_or_else(|| display_failure_label(run_label).to_string());
+
+    RunFailureDetail { reason, data }
+}
+
+fn step_label_prefix(job_name: &str, step: &RunFailureStep) -> String {
+    match step.number {
+        Some(number) => format!("{job_name} #{number} {}", step.name),
+        None => format!("{job_name} {}", step.name),
+    }
+}
+
+fn failure_label<'a>(status: &'a str, conclusion: Option<&'a str>) -> Option<&'a str> {
+    let label = conclusion
+        .filter(|value| !value.trim().is_empty())
+        .unwrap_or(status);
+    match label {
+        "failure" | "cancelled" | "timed_out" | "startup_failure" | "action_required" => {
+            Some(label)
+        }
+        _ => None,
+    }
+}
+
+fn display_failure_label(label: &str) -> &str {
+    match label {
+        "timed_out" => "timed out",
+        "startup_failure" => "startup failure",
+        "action_required" => "action required",
+        other => other,
+    }
 }
 
 #[cfg(test)]
@@ -281,6 +432,7 @@ mod tests {
     #[test]
     fn parses_runs() {
         let json = r#"[{
+            "attempt":1,
             "conclusion":"success",
             "createdAt":"2026-05-29T14:00:00Z",
             "databaseId":123,
@@ -293,6 +445,7 @@ mod tests {
             "startedAt":"2026-05-29T14:00:03Z",
             "status":"completed",
             "updatedAt":"2026-05-29T14:01:03Z",
+            "url":"https://github.com/owner/repo/actions/runs/123",
             "workflowDatabaseId":456,
             "workflowName":"verify"
         }]"#;
@@ -300,6 +453,14 @@ mod tests {
         let runs = parse_runs(json).unwrap();
         assert_eq!(runs[0].database_id, 123);
         assert_eq!(runs[0].workflow_label(), "verify");
+        assert_eq!(runs[0].attempt, Some(1));
+        assert_eq!(runs[0].head_sha.as_deref(), Some("abc"));
+        assert_eq!(runs[0].number, Some(1));
+        assert_eq!(
+            runs[0].url.as_deref(),
+            Some("https://github.com/owner/repo/actions/runs/123")
+        );
+        assert_eq!(runs[0].workflow_database_id, Some(456));
     }
 
     #[test]
@@ -327,6 +488,7 @@ mod tests {
                 "startedAt":"2026-05-29T14:00:03Z",
                 "status":"in_progress",
                 "updatedAt":"2026-05-29T14:01:03Z",
+                "url":"https://github.com/owner/repo/actions/runs/123",
                 "workflowDatabaseId":456,
                 "workflowName":"verify"
             }]"#,
@@ -356,6 +518,80 @@ mod tests {
         assert!(calls[1]
             .windows(2)
             .any(|pair| pair == ["--json", RUN_PR_JSON_FIELDS]));
+    }
+
+    #[test]
+    fn fetch_runs_populates_failure_reason_and_data_for_failed_runs() {
+        let runner = FakeRunner::new(vec![
+            r#"[{
+                "attempt":1,
+                "conclusion":"failure",
+                "createdAt":"2026-05-29T14:00:00Z",
+                "databaseId":123,
+                "displayTitle":"feat: dashboard",
+                "event":"push",
+                "headBranch":"feature",
+                "headSha":"abc",
+                "name":"verify",
+                "number":1,
+                "startedAt":"2026-05-29T14:00:03Z",
+                "status":"completed",
+                "updatedAt":"2026-05-29T14:01:03Z",
+                "url":"https://github.com/owner/repo/actions/runs/123",
+                "workflowDatabaseId":456,
+                "workflowName":"verify"
+            }]"#,
+            r#"{
+                "jobs":[{
+                    "conclusion":"failure",
+                    "name":"test",
+                    "status":"completed",
+                    "steps":[{
+                        "conclusion":"failure",
+                        "name":"cargo test",
+                        "number":2,
+                        "status":"completed"
+                    }]
+                }]
+            }"#,
+        ]);
+        let settings = Settings {
+            repo: None,
+            interval: std::time::Duration::from_secs(15),
+            limit: 20,
+            columns: Vec::new(),
+            pr_columns: Vec::new(),
+            filters: Filters::default(),
+            cursor: crate::config::CursorSettings {
+                auto_hide: true,
+                hide_after: std::time::Duration::from_secs(5),
+            },
+            global: false,
+            layout: crate::config::DashboardLayout::InProgress,
+        };
+
+        let runs = fetch_runs("owner/repo", &settings, &runner).unwrap();
+
+        assert_eq!(
+            runs[0].failure_reason.as_deref(),
+            Some("test / cargo test (failure)")
+        );
+        assert_eq!(
+            runs[0].failure_data,
+            vec![
+                "job test: failure".to_string(),
+                "step test #2 cargo test: failure".to_string()
+            ]
+        );
+        let calls = runner.calls.borrow();
+        assert_eq!(calls.len(), 2);
+        assert!(calls[1].windows(2).any(|pair| pair == ["run", "view"]));
+        assert!(calls[1]
+            .windows(2)
+            .any(|pair| pair == ["--repo", "owner/repo"]));
+        assert!(calls[1]
+            .windows(2)
+            .any(|pair| pair == ["--json", RUN_FAILURE_JSON_FIELDS]));
     }
 
     #[test]

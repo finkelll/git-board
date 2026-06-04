@@ -85,7 +85,8 @@ Keys:
 - `q` / `ESC`: close panel / quit
 
 In the quick look panel, `↑` / `↓` scrolls overflowing row data, and
-`␣`, `q`, or `ESC` closes it.
+`␣`, `q`, or `ESC` closes it. Failed runs include the failed job or step
+summary when GitHub returns that detail.
 
 In the config panel, `↑` / `↓` changes the focused setting, `←` /
 `→`, `-`, and `+` edit values, `←` / `→` moves the cursor inside

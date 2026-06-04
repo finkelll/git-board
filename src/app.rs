@@ -851,17 +851,24 @@ mod tests {
             .with_ymd_and_hms(2026, 6, 2, 10, created_minute, 0)
             .unwrap();
         Run {
+            attempt: Some(1),
             conclusion: conclusion.map(ToString::to_string),
             created_at,
             database_id,
             display_title: format!("run {database_id}"),
             event: "push".to_string(),
             head_branch: head_branch.to_string(),
+            head_sha: Some(format!("sha-{database_id}")),
             name: workflow_name.to_string(),
+            number: Some(database_id),
+            failure_data: Vec::new(),
+            failure_reason: None,
             pr_number: None,
             started_at: Some(created_at),
             status: status.to_string(),
             updated_at: created_at,
+            url: Some(format!("https://github.test/runs/{database_id}")),
+            workflow_database_id: Some(1000 + database_id),
             workflow_name: workflow_name.to_string(),
         }
     }

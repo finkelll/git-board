@@ -621,20 +621,48 @@ fn quick_look_lines(state: &State) -> Vec<Line<'static>> {
 }
 
 fn run_detail_lines(run: &Run) -> Vec<Line<'static>> {
-    vec![
+    let mut lines = vec![
         value_line("status", run.status_label()),
         value_line("conclusion", run.conclusion.as_deref().unwrap_or("")),
+    ];
+
+    if let Some(reason) = run.failure_reason.as_deref() {
+        lines.push(value_line("fail reason", reason));
+    }
+    for detail in &run.failure_data {
+        lines.push(value_line("fail data", detail));
+    }
+
+    lines.extend([
         value_line("title", &run.display_title),
         value_line("workflow", run.workflow_label()),
         value_line("branch", &run.head_branch),
         value_line("event", &run.event),
-        value_line(
-            "pr",
-            &run.pr_number
-                .map(|number| format!("#{number}"))
-                .unwrap_or_default(),
-        ),
-        value_line("id", &run.database_id.to_string()),
+    ]);
+
+    if let Some(attempt) = run.attempt {
+        lines.push(value_line("attempt", &attempt.to_string()));
+    }
+    if let Some(number) = run.number {
+        lines.push(value_line("run #", &number.to_string()));
+    }
+    lines.push(value_line(
+        "pr",
+        &run.pr_number
+            .map(|number| format!("#{number}"))
+            .unwrap_or_default(),
+    ));
+    lines.push(value_line("id", &run.database_id.to_string()));
+    if let Some(workflow_database_id) = run.workflow_database_id {
+        lines.push(value_line("workflow id", &workflow_database_id.to_string()));
+    }
+    if let Some(head_sha) = run.head_sha.as_deref() {
+        lines.push(value_line("head sha", head_sha));
+    }
+    if let Some(url) = run.url.as_deref() {
+        lines.push(value_line("url", url));
+    }
+    lines.extend([
         value_line("created", &run.created_at.to_rfc3339()),
         value_line(
             "started",
@@ -647,7 +675,9 @@ fn run_detail_lines(run: &Run) -> Vec<Line<'static>> {
             &timefmt::elapsed(run.started_at, run.updated_at, &run.status),
         ),
         value_line("age", &timefmt::age(run.created_at)),
-    ]
+    ]);
+
+    lines
 }
 
 fn pull_request_detail_lines(pull_request: &PullRequest) -> Vec<Line<'static>> {
