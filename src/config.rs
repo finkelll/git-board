@@ -88,6 +88,8 @@ impl FromStr for DashboardLayout {
     }
 }
 
+const DEFAULT_LAYOUT: DashboardLayout = DashboardLayout::All;
+
 #[derive(Debug, Default, Deserialize)]
 struct FileConfig {
     repo: Option<String>,
@@ -166,7 +168,7 @@ impl Settings {
             global: !args.independent,
             layout: match args.layout.or(file.layout) {
                 Some(value) => value.parse()?,
-                None => DashboardLayout::InProgress,
+                None => DEFAULT_LAYOUT,
             },
         })
     }
@@ -241,6 +243,11 @@ mod tests {
 
         assert_eq!(cursor.auto_hide, true);
         assert_eq!(cursor.hide_after, Duration::from_secs(5));
+    }
+
+    #[test]
+    fn defaults_layout_all() {
+        assert_eq!(DEFAULT_LAYOUT, DashboardLayout::All);
     }
 
     #[test]

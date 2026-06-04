@@ -130,6 +130,7 @@ impl Panel {
                 ("r", "Refresh immediately"),
                 ("l", "Cycle run layout"),
                 ("s", "Cycle run sort"),
+                ("v", "Toggle verify workflow filter"),
                 ("d", "Open destroy sessions prompt"),
                 ("h", "Toggle cursor auto-hide"),
                 ("⇥", "Switch between Actions and pull request screens"),

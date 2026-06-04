@@ -72,6 +72,7 @@ pub struct State {
     pub quick_look_scroll: usize,
     pub keys_scroll: usize,
     pub run_sort: RunSort,
+    pub verify_workflows_only: bool,
     pub settings: Settings,
     pub global_cache_status: Option<GlobalCacheStatus>,
 }
@@ -171,6 +172,7 @@ fn run_loop(
         quick_look_scroll: 0,
         keys_scroll: 0,
         run_sort: RunSort::TimeDescSuccessesLast,
+        verify_workflows_only: false,
         settings,
         global_cache_status: global_cache.as_ref().and_then(|cache| cache.status().ok()),
     };
@@ -301,6 +303,11 @@ fn handle_key(
         }
         KeyCode::Char('s') => {
             state.run_sort = state.run_sort.next();
+            clamp_selection(state);
+            false
+        }
+        KeyCode::Char('v') => {
+            state.verify_workflows_only = !state.verify_workflows_only;
             clamp_selection(state);
             false
         }
@@ -973,7 +980,8 @@ mod tests {
             sorted_visible_run_indices(
                 &runs,
                 DashboardLayout::InProgress,
-                RunSort::TimeDescSuccessesLast
+                RunSort::TimeDescSuccessesLast,
+                false,
             ),
             vec![1, 2, 0]
         );
@@ -995,7 +1003,12 @@ mod tests {
         ];
 
         assert_eq!(
-            sorted_visible_run_indices(&runs, DashboardLayout::InProgress, RunSort::TimeDesc),
+            sorted_visible_run_indices(
+                &runs,
+                DashboardLayout::InProgress,
+                RunSort::TimeDesc,
+                false
+            ),
             vec![0, 1, 2]
         );
     }
@@ -1008,8 +1021,32 @@ mod tests {
         ];
 
         assert_eq!(
-            sorted_visible_run_indices(&runs, DashboardLayout::All, RunSort::TimeDescSuccessesLast),
+            sorted_visible_run_indices(
+                &runs,
+                DashboardLayout::All,
+                RunSort::TimeDescSuccessesLast,
+                false,
+            ),
             vec![1, 0]
+        );
+    }
+
+    #[test]
+    fn verify_workflow_toggle_shows_only_verify_workflows() {
+        let runs = vec![
+            run(1, "lint", "main", Some("success"), "completed", 10),
+            run(2, "verify", "main", Some("success"), "completed", 12),
+            run(3, "Verify", "main", Some("failure"), "completed", 14),
+        ];
+
+        assert_eq!(
+            sorted_visible_run_indices(
+                &runs,
+                DashboardLayout::All,
+                RunSort::TimeDescSuccessesLast,
+                true,
+            ),
+            vec![2, 1]
         );
     }
 
@@ -1115,18 +1152,36 @@ pub fn selected_run(state: &State) -> Option<&Run> {
 }
 
 pub fn visible_run_indices(state: &State) -> Vec<usize> {
-    sorted_visible_run_indices(&state.runs, state.settings.layout, state.run_sort)
+    sorted_visible_run_indices(
+        &state.runs,
+        state.settings.layout,
+        state.run_sort,
+        state.verify_workflows_only,
+    )
 }
 
-fn sorted_visible_run_indices(runs: &[Run], layout: DashboardLayout, sort: RunSort) -> Vec<usize> {
+fn sorted_visible_run_indices(
+    runs: &[Run],
+    layout: DashboardLayout,
+    sort: RunSort,
+    verify_workflows_only: bool,
+) -> Vec<usize> {
     let mut indices = runs
         .iter()
         .enumerate()
-        .filter_map(|(index, run)| run_visible_in_layout(run, runs, layout).then_some(index))
+        .filter_map(|(index, run)| {
+            (run_visible_in_layout(run, runs, layout)
+                && run_visible_in_workflow_toggle(run, verify_workflows_only))
+            .then_some(index)
+        })
         .collect::<Vec<_>>();
 
     indices.sort_by(|left, right| compare_runs_for_sort(&runs[*left], &runs[*right], layout, sort));
     indices
+}
+
+fn run_visible_in_workflow_toggle(run: &Run, verify_workflows_only: bool) -> bool {
+    !verify_workflows_only || run.workflow_label().eq_ignore_ascii_case("verify")
 }
 
 fn compare_runs_for_sort(

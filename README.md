@@ -58,10 +58,9 @@ shared cache.
 
 Run layouts:
 
-- `in-progress`: default startup layout. Shows in-progress runs, unresolved
-  failures, and the latest successful run for each workflow that has no newer
-  run.
-- `all`: shows all runs.
+- `all`: default startup layout. Shows all runs.
+- `in-progress`: shows in-progress runs, unresolved failures, and the latest
+  successful run for each workflow that has no newer run.
 
 An unresolved failure is a failed run whose same workflow and branch has no newer
 started run and no newer successful run.
@@ -75,6 +74,7 @@ Keys:
 - `r`: refresh immediately
 - `l`: cycle run layout
 - `s`: cycle run sort
+- `v`: toggle showing only `verify` workflows
 - `⇥`: switch between GitHub Actions and open pull request screens
 - `h`: toggle cursor auto-hide
 - `c`: show focused config panel
@@ -110,7 +110,7 @@ config values.
 repo = "owner/name"
 interval = "15s"
 limit = 20
-layout = "in-progress"
+layout = "all"
 columns = ["status", "title", "workflow", "branch", "event", "pr", "id", "elapsed", "age"]
 pr_columns = ["status", "title", "author", "branch", "base", "number", "age", "updated"]
 
