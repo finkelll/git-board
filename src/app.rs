@@ -189,12 +189,8 @@ fn run_loop(
             last_tick = Instant::now();
         }
 
-        if state.cursor_visible && state.settings.cursor.auto_hide {
-            if let Some(last_navigation_at) = last_navigation_at {
-                if last_navigation_at.elapsed() >= state.settings.cursor.hide_after {
-                    state.cursor_visible = false;
-                }
-            }
+        if cursor_auto_hide_due(&state, last_navigation_at, Instant::now()) {
+            state.cursor_visible = false;
         }
 
         if let Some(cache) = &mut global_cache {
@@ -263,6 +259,18 @@ fn run_loop(
 }
 
 fn handle_key(
+    key: KeyEvent,
+    state: &mut State,
+    next_refresh: &mut Instant,
+    last_navigation_at: &mut Option<Instant>,
+) -> bool {
+    let panel_was_open = state.panel.is_some();
+    let should_quit = handle_key_inner(key, state, next_refresh, last_navigation_at);
+    restart_cursor_auto_hide_after_panel_close(panel_was_open, state, last_navigation_at);
+    should_quit
+}
+
+fn handle_key_inner(
     key: KeyEvent,
     state: &mut State,
     next_refresh: &mut Instant,
@@ -368,6 +376,29 @@ fn handle_key(
             false
         }
         _ => false,
+    }
+}
+
+fn cursor_auto_hide_due(state: &State, last_navigation_at: Option<Instant>, now: Instant) -> bool {
+    state.panel.is_none()
+        && state.cursor_visible
+        && state.settings.cursor.auto_hide
+        && last_navigation_at.is_some_and(|last_navigation_at| {
+            now.saturating_duration_since(last_navigation_at) >= state.settings.cursor.hide_after
+        })
+}
+
+fn restart_cursor_auto_hide_after_panel_close(
+    panel_was_open: bool,
+    state: &State,
+    last_navigation_at: &mut Option<Instant>,
+) {
+    if panel_was_open
+        && state.panel.is_none()
+        && state.cursor_visible
+        && state.settings.cursor.auto_hide
+    {
+        *last_navigation_at = Some(Instant::now());
     }
 }
 
@@ -844,6 +875,7 @@ fn adjust_usize(value: usize, direction: i32, min: usize, max: usize) -> usize {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::columns::{Column, PrColumn};
     use chrono::{TimeZone, Utc};
 
     fn run(
@@ -878,6 +910,113 @@ mod tests {
             workflow_database_id: Some(1000 + database_id),
             workflow_name: workflow_name.to_string(),
         }
+    }
+
+    fn state_with_cursor(
+        cursor_visible: bool,
+        cursor_auto_hide: bool,
+        panel: Option<Panel>,
+    ) -> State {
+        State {
+            repo: "owner/repo".to_string(),
+            screen: Screen::Runs,
+            runs: Vec::new(),
+            pull_requests: Vec::new(),
+            selected_run: 0,
+            selected_pr: 0,
+            runs_scroll: 0,
+            prs_scroll: 0,
+            cursor_visible,
+            last_check: None,
+            loading: false,
+            tick: 0,
+            error: None,
+            panel,
+            auth_prompt_focus: 0,
+            auth_prompt_dismissed: false,
+            auth_login_requested: false,
+            destroy_prompt_focus: 1,
+            destroy_massive_focus: 1,
+            config_draft: None,
+            config_focus: 0,
+            config_text_cursor: 0,
+            quick_look_scroll: 0,
+            keys_scroll: 0,
+            run_sort: RunSort::TimeDescSuccessesLast,
+            verify_workflows_only: false,
+            settings: Settings {
+                repo: None,
+                interval: Duration::from_secs(15),
+                limit: 20,
+                columns: Column::default_columns(),
+                pr_columns: PrColumn::default_columns(),
+                filters: Default::default(),
+                cursor: CursorSettings {
+                    auto_hide: cursor_auto_hide,
+                    hide_after: Duration::from_secs(5),
+                },
+                global: false,
+                layout: DashboardLayout::All,
+            },
+            global_cache_status: None,
+        }
+    }
+
+    #[test]
+    fn cursor_auto_hide_waits_while_panel_is_open() {
+        let now = Instant::now();
+        let last_navigation_at = Some(now - Duration::from_secs(30));
+        let mut state = state_with_cursor(true, true, Some(Panel::config()));
+
+        assert!(!cursor_auto_hide_due(&state, last_navigation_at, now));
+
+        state.panel = None;
+
+        assert!(cursor_auto_hide_due(&state, last_navigation_at, now));
+    }
+
+    #[test]
+    fn closing_panel_restarts_cursor_auto_hide_timer() {
+        let mut state = state_with_cursor(true, true, Some(Panel::quick_look()));
+        let mut next_refresh = Instant::now();
+        let mut last_navigation_at = Some(Instant::now() - Duration::from_secs(30));
+
+        let should_quit = handle_key(
+            KeyEvent::from(KeyCode::Char(' ')),
+            &mut state,
+            &mut next_refresh,
+            &mut last_navigation_at,
+        );
+
+        assert!(!should_quit);
+        assert!(state.panel.is_none());
+        assert!(!cursor_auto_hide_due(
+            &state,
+            last_navigation_at,
+            Instant::now()
+        ));
+    }
+
+    #[test]
+    fn switching_between_panels_does_not_restart_cursor_auto_hide_timer() {
+        let mut state = state_with_cursor(true, true, Some(Panel::destroy()));
+        let mut next_refresh = Instant::now();
+        let old_last_navigation_at = Instant::now() - Duration::from_secs(30);
+        let mut last_navigation_at = Some(old_last_navigation_at);
+
+        let should_quit = handle_key(
+            KeyEvent::from(KeyCode::Char('m')),
+            &mut state,
+            &mut next_refresh,
+            &mut last_navigation_at,
+        );
+
+        assert!(!should_quit);
+        assert_eq!(
+            state.panel.map(|panel| panel.kind),
+            Some(PanelKind::DestroyMassiveConfirm)
+        );
+        assert_eq!(last_navigation_at, Some(old_last_navigation_at));
     }
 
     #[test]
